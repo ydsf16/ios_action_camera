@@ -77,8 +77,37 @@ Signed Release and simulator builds passed. The simulator completed an 81-frame
 export using the native path; an extracted output frame was visually checked.
 Simulator timings are not an iPhone performance result.
 
-Physical iPhone validation is pending: YJJY was unavailable during this change.
-Signed Release build does not establish installed-device performance.
+## Physical iPhone 16 validation (2026-09-12)
+
+YJJY was reconnected and tested using a real 35.603333 s recording (1068 frames,
+3840x2160 input, 1920x1080 output, original -90 degree display transform). Settings:
+strength 0.5, dynamic crop on, maximum 2x, black borders off. Original and prior
+output were backed up outside the public repository.
+
+| Run | Processing time |
+| --- | ---: |
+| Previous 0.3.1 receipt, historical reference | 28.335 s |
+| 0.4.0 optimized Debug, legacy BGRA path | 17.014 s |
+| Same build, native NV12 path | 6.926 s |
+
+The controlled same-build comparison is 2.46x faster, or 5.14x playback speed.
+The historical 28.335 s measurement includes build/run-condition differences and
+is not an isolated pipeline benchmark. These are single foreground runs, not a
+sustained thermal guarantee. Native input parsing 0.087 s, pose/smoothing/crop
+0.048 s, transforms 0.017 s, decode waits 0.619 s, GPU submission 0.149 s,
+GPU waits 4.964 s, encoder wait/append 0.406 s, finishing 0.051 s.
+
+Full native output decodes, 1068 frames / 35.603333 s, transform preserved;
+all 1670 audio packet hashes match the input. An extracted frame was inspected.
+Encoded native vs legacy comparison averages 38.88 dB PSNR, with the expected
+resampling/subpixel differences described above. App-side pixel-copy count is zero.
+
+Initial attempts were cancelled while the phone was locked. Check `devicectl device
+info lockState` and keep the app in foreground before benchmarking. Unlocking the
+phone allowed both tests to complete. Finally the signed 0.4.0 build 8 Release app
+was installed and launched normally, retaining the native result. Reported timings
+were collected using optimized Debug diagnostics; the final Release install was
+verified separately.
 
 Apple references: [Core Video Metal texture mapping](https://developer.apple.com/documentation/corevideo/cvmetaltexturecachecreatetexturefromimage(_:_:_:_:_:_:_:_:_:)),
 [Apple-silicon image processing](https://developer.apple.com/videos/play/wwdc2021/10153/).
