@@ -22,6 +22,12 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     @Published private(set) var phase: CameraPhase = .preparing
     @Published private(set) var lenses: [CameraLens] = []
     @Published private(set) var selectedLens = ""
+    @Published private(set) var usesVirtualCamera = false
+    @Published private(set) var zoom = 1.0
+    @Published private(set) var zoomRange = CaptureZoom(multiplier: 1, minimumDeviceZoom: 1, maximumDeviceZoom: 1, nativeDeviceZooms: [])
+    @Published private(set) var activeLensLabel = ""
+    private var lastZoomPublish = 0.0
+    private var zoomRequest: DispatchWorkItem?
     @Published private(set) var exposurePolicy = CaptureExposurePolicy.load()
     private var activeExposurePolicy = CaptureExposurePolicy.load()
     @Published private(set) var focusLabel = "准备中"
@@ -169,7 +175,16 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         let microphoneInput = try AVCaptureDeviceInput(device: microphone)
         guard session.canAddInput(microphoneInput) else { throw CaptureFailure.message("无法启动麦克风。") }
         session.addInput(microphoneInput)
-        try installCamera(lens)
+        var installedVirtual = false
+        for type in [AVCaptureDevice.DeviceType.builtInTripleCamera, .builtInDualWideCamera, .builtInDualCamera] {
+            guard AVCaptureDevice.default(type, for: .video, position: .back) != nil else { continue }
+            do {
+                try installCamera(CameraLens(id: type.rawValue, label: "自动", type: type))
+                installedVirtual = true
+                break
+            } catch { /* Try a compatible virtual device, then the physical fallback. */ }
+        }
+        if !installedVirtual { try installCamera(lens) }
         configured = true
         publish { $0.lenses = available; $0.permissionDenied = false }
         #endif
@@ -191,15 +206,20 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
             try configureFormat(device, selection: selected, format: format)
             cameraInput = replacement
             try configureVideoConnection()
+            if device.isVirtualDevice, videoOutput.connection(with: .video)?.isCameraIntrinsicMatrixDeliveryEnabled != true {
+                throw CaptureFailure.message("此虚拟相机格式不支持逐帧内参，无法用于稳定处理。")
+            }
             let changed = selected != activeCaptureFormat
             activeCaptureFormat = selected; formatChoices = choices
             selected.save()
             let focus = device.focusMode == .continuousAutoFocus ? "连续自动对焦" : "此镜头为固定对焦"
             publish {
                 $0.focusLabel = focus; $0.selectedLens = lens.id; $0.selectedFormat = selected
+                $0.usesVirtualCamera = device.isVirtualDevice
                 $0.availableFormats = CaptureFormat.candidates.filter { choices[$0] != nil }
                 if changed { $0.message = "此镜头已使用支持的格式：\(selected.label) fps。" }
             }
+            publishZoom(device, force: true)
         } catch {
             if session.inputs.contains(replacement) { session.removeInput(replacement) }
             cameraInput = previous
@@ -260,7 +280,12 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         }
         device.automaticallyAdjustsVideoHDREnabled = false
         if format.isVideoHDRSupported { device.isVideoHDREnabled = false }
-        device.videoZoomFactor = 1
+        let zoomRange = Self.zoomConfiguration(device)
+        device.cancelVideoZoomRamp()
+        device.videoZoomFactor = CGFloat(zoomRange.deviceZoom(for: 1))
+        if device.isVirtualDevice, device.primaryConstituentDeviceSwitchingBehavior != .unsupported {
+            device.setPrimaryConstituentDeviceSwitchingBehavior(.auto, restrictedSwitchingBehaviorConditions: [])
+        }
         try applyRecordingControlsLocked(device)
         if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) { device.whiteBalanceMode = .continuousAutoWhiteBalance }
     }
@@ -288,6 +313,9 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         do {
             try configureFormat(device, selection: selection, format: format)
             try configureVideoConnection()
+            if device.isVirtualDevice, videoOutput.connection(with: .video)?.isCameraIntrinsicMatrixDeliveryEnabled != true {
+                throw CaptureFailure.message("此格式无法提供稳定所需的逐帧内参，请选择其他格式。")
+            }
             activeCaptureFormat = selection
             selection.save()
             publish { $0.selectedFormat = selection }
@@ -308,7 +336,69 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
             publish { $0.message = failure.localizedDescription }
         }
         session.commitConfiguration()
+        publishZoom(device, force: true)
         resumeIfPossible()
+    }
+
+    static func zoomConfiguration(_ device: AVCaptureDevice) -> CaptureZoom {
+        let multiplier: Double
+        if #available(iOS 18.0, *) { multiplier = Double(device.displayVideoZoomFactorMultiplier) }
+        else if device.isVirtualDevice,
+                let wide = device.constituentDevices.firstIndex(where: { $0.deviceType == .builtInWideAngleCamera }), wide > 0,
+                wide - 1 < device.virtualDeviceSwitchOverVideoZoomFactors.count {
+            multiplier = 1 / device.virtualDeviceSwitchOverVideoZoomFactors[wide - 1].doubleValue
+        } else { multiplier = device.deviceType == .builtInUltraWideCamera ? 0.5 : 1 }
+        return CaptureZoom(multiplier: multiplier,
+            minimumDeviceZoom: Double(device.minAvailableVideoZoomFactor),
+            maximumDeviceZoom: Double(device.maxAvailableVideoZoomFactor),
+            nativeDeviceZooms: [1] + device.virtualDeviceSwitchOverVideoZoomFactors.map(\.doubleValue))
+    }
+
+    /// Coalesce gesture updates on the capture queue; never stop/reconfigure the
+    /// session or reset its clock while changing zoom during a recording.
+    func setZoom(_ value: Double, smooth: Bool = false) {
+        guard value.isFinite else { return }
+        queue.async { [self] in
+            zoomRequest?.cancel()
+            let request = DispatchWorkItem { [weak self] in
+                guard let self, self.configured, self.wantsActive, self.session.isRunning, !self.isFinishing,
+                      let device = self.cameraInput?.device else { return }
+                do {
+                    let range = Self.zoomConfiguration(device)
+                    let target = CGFloat(range.deviceZoom(for: value))
+                    try device.lockForConfiguration()
+                    defer { device.unlockForConfiguration() }
+                    if smooth { device.ramp(toVideoZoomFactor: target, withRate: 3) }
+                    else { device.videoZoomFactor = target }
+                    self.publishZoom(device, force: true)
+                } catch { self.publish { $0.message = error.localizedDescription } }
+            }
+            zoomRequest = request
+            queue.async(execute: request)
+        }
+    }
+
+    private func publishZoom(_ device: AVCaptureDevice, force: Bool = false) {
+        let now = CMClockGetTime(CMClockGetHostTimeClock()).seconds
+        guard force || now - lastZoomPublish >= 0.1 else { return }
+        lastZoomPublish = now
+        let range = Self.zoomConfiguration(device)
+        let value = range.displayZoom(for: Double(device.videoZoomFactor))
+        let primary = device.activePrimaryConstituent ?? device
+        let label: String
+        switch primary.deviceType {
+        case .builtInUltraWideCamera: label = "超广角"
+        case .builtInWideAngleCamera: label = "广角"
+        case .builtInTelephotoCamera: label = "长焦"
+        default: label = "自动"
+        }
+        let focus = primary.focusMode == .continuousAutoFocus ? "连续自动对焦" : "此镜头为固定对焦"
+        publish {
+            if $0.zoomRange != range { $0.zoomRange = range }
+            if abs($0.zoom - value) > 0.001 { $0.zoom = value }
+            if $0.activeLensLabel != label { $0.activeLensLabel = label }
+            if $0.focusLabel != focus { $0.focusLabel = focus }
+        }
     }
 
     /// Caller holds the device configuration lock. Reapply after format changes.
@@ -380,6 +470,13 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         let maximum = device.activeMaxExposureDuration.seconds
         let size = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
         let report: [String: Any] = ["focus_mode": device.focusMode.rawValue,
+            "camera": device.deviceType.rawValue, "virtual_camera": device.isVirtualDevice,
+            "constituent_devices": device.constituentDevices.map { $0.deviceType.rawValue },
+            "active_camera_observed": (device.activePrimaryConstituent ?? device).deviceType.rawValue,
+            "zoom_observed": device.videoZoomFactor,
+            "display_zoom_multiplier": Self.zoomConfiguration(device).multiplier,
+            "intrinsics_delivery_enabled": videoOutput.connection(with: .video)?.isCameraIntrinsicMatrixDeliveryEnabled ?? false,
+            "stabilization_active": videoOutput.connection(with: .video)?.activeVideoStabilizationMode.rawValue ?? -1,
             "width": size.width, "height": size.height, "requested_fps": activeCaptureFormat.fps,
             "min_frame_duration_seconds": device.activeVideoMinFrameDuration.seconds,
             "max_frame_duration_seconds": device.activeVideoMaxFrameDuration.seconds,
@@ -509,6 +606,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        if output === videoOutput, let device = cameraInput?.device { publishZoom(device) }
         guard let recording = recorder, !isFinishing else { return }
         do {
             if output === videoOutput, let device = cameraInput?.device {

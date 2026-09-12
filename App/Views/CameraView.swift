@@ -8,6 +8,7 @@ struct CameraView: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var showLibrary = false
     @State private var showSettings = false
+    @State private var pinchStartZoom: Double?
 
     private var recording: Bool { camera.phase == .recording }
 
@@ -15,6 +16,11 @@ struct CameraView: View {
         ZStack {
             CameraPreview(session: camera.session, rotationChanged: camera.setRecordingRotation)
                 .ignoresSafeArea()
+                .gesture(MagnifyGesture().onChanged { value in
+                    guard camera.phase == .ready || recording else { return }
+                    if pinchStartZoom == nil { pinchStartZoom = camera.zoom }
+                    camera.setZoom((pinchStartZoom ?? camera.zoom) * value.magnification)
+                }.onEnded { _ in pinchStartZoom = nil })
 
             // Subtle scrims keep controls readable without reserving space in the viewfinder.
             VStack(spacing: 0) {
@@ -65,7 +71,8 @@ struct CameraView: View {
                 Spacer(minLength: 24)
 
                 VStack(spacing: 16) {
-                    HStack(spacing: 14) {
+                    if !camera.usesVirtualCamera {
+                        HStack(spacing: 14) {
                         ForEach(camera.lenses) { lens in
                             Button { camera.selectLens(lens) } label: {
                                 Text(lens.label).font(.system(size: 14, weight: .semibold))
@@ -73,7 +80,9 @@ struct CameraView: View {
                                     .frame(width: 44, height: 44).background(.black.opacity(0.45), in: Circle())
                             }.disabled(camera.phase != .ready)
                         }
+                        }
                     }
+                    if camera.zoomRange.maximum > camera.zoomRange.minimum { CameraZoomControls(camera: camera) }
 
                     Text(camera.phase == .finishing ? "正在保存…" : "视频")
                         .foregroundStyle(.yellow).font(.system(size: 14, weight: .semibold))
@@ -271,12 +280,14 @@ private struct RecordingSettingsView: View {
                 }.listRowBackground(AppTheme.surface)
                 Section {
                     DisclosureGroup("采集信息") {
+                        LabeledContent("镜头切换", value: camera.usesVirtualCamera ? "随变焦自动切换" : "单镜头")
+                        LabeledContent("当前镜头", value: camera.activeLensLabel)
                         LabeledContent("声音", value: "开启")
                         LabeledContent("方向", value: "自动横竖屏")
                         LabeledContent("视频／IMU 时钟同步", value: "开启")
                         Text("自动曝光和 ISO 调节保留。使用系统时间戳对齐，不代表硬件触发同步。")
                             .font(.footnote).foregroundStyle(.secondary)
-                        Text("仅显示当前镜头支持的格式。录制期间格式和镜头固定；60 fps 会增加存储和处理量。")
+                        Text("录制期间分辨率和帧率固定，可双指或使用滑条变焦。自动切换镜头由系统根据倍率、光线和对焦距离决定；60 fps 会增加存储和处理量。")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                 }.listRowBackground(AppTheme.surface)

@@ -42,7 +42,7 @@ for mode in ['Debug', 'Release']:
     appsettings = {'PRODUCT_NAME':'$(TARGET_NAME)', 'PRODUCT_BUNDLE_IDENTIFIER':'com.grape.MotionCam',
         'INFOPLIST_FILE':'App/Resources/Info.plist', 'GENERATE_INFOPLIST_FILE':'NO', 'TARGETED_DEVICE_FAMILY':'1',
         'SUPPORTED_PLATFORMS':'iphoneos iphonesimulator', 'SUPPORTS_MACCATALYST':'NO',
-        'SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD':'NO', 'MARKETING_VERSION':'0.6.1', 'CURRENT_PROJECT_VERSION':'15',
+        'SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD':'NO', 'MARKETING_VERSION':'0.7.0', 'CURRENT_PROJECT_VERSION':'16',
         'CODE_SIGN_STYLE':'Automatic', 'DEVELOPMENT_TEAM':'F2LVFHW3ZH',
         'LD_RUNPATH_SEARCH_PATHS':'$(inherited) @executable_path/Frameworks',
         'ARCHS':'arm64',

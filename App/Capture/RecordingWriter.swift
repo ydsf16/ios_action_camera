@@ -52,6 +52,10 @@ final class RecordingWriter {
             stabilizationActive: connection.activeVideoStabilizationMode.rawValue,
             intrinsicsDeliveryEnabled: connection.isCameraIntrinsicMatrixDeliveryEnabled)
         manifest.displayRotationDegrees = rotationDegrees
+        manifest.virtualCamera = device.isVirtualDevice
+        manifest.constituentCameras = device.isVirtualDevice ? device.constituentDevices.map { $0.deviceType.rawValue } : [device.deviceType.rawValue]
+        manifest.zoomDisplayMultiplier = CaptureService.zoomConfiguration(device).multiplier
+        manifest.cameraObservationSource = "zoom_observed and camera_index_observed are device properties sampled at callback, not frame-exact. K is attached to the actual sample buffer."
         manifest.requestedFPS = captureFormat.fps
         manifest.appBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
         manifest.captureBufferStrategy = captureFormat.fps >= 60 ? "metal_nv12_owned_pool_8" : "camera_buffers_direct"
@@ -64,7 +68,7 @@ final class RecordingWriter {
         manifest.warnings = ["OIS state is not guaranteed by stabilizationMode=off.",
                              "Rolling shutter readout and lens distortion are uncalibrated."]
         frames = try CSVFile(url: directory.appendingPathComponent("frames.csv"),
-            header: "frame,pts_value,pts_timescale,host_sec,video_sec,width,height,k00,k01,k02,k10,k11,k12,k20,k21,k22,exposure_sec_observed,iso_observed,focus_observed,zoom_observed,stabilization_active")
+            header: "frame,pts_value,pts_timescale,host_sec,video_sec,width,height,k00,k01,k02,k10,k11,k12,k20,k21,k22,exposure_sec_observed,iso_observed,focus_observed,zoom_observed,stabilization_active,camera_index_observed")
         audioTimes = try CSVFile(url: directory.appendingPathComponent("audio.csv"),
             header: "buffer,pts_value,pts_timescale,host_sec,video_sec,samples,duration_sec")
         drops = try CSVFile(url: directory.appendingPathComponent("drops.csv"), header: "stream,pts_value,pts_timescale,reason")
@@ -153,7 +157,9 @@ final class RecordingWriter {
         let k = intrinsics(sample)
         if k != nil { manifest.framesWithIntrinsics += 1 }
         let matrix = (k ?? Array(repeating: Double.nan, count: 9)).map { String($0) }.joined(separator: ",")
-        try frames.append("\(manifest.videoFrames),\(pts.value),\(pts.timescale),\(host),\(relative),\(manifest.width),\(manifest.height),\(matrix),\(device.exposureDuration.seconds),\(device.iso),\(device.lensPosition),\(device.videoZoomFactor),\(connection.activeVideoStabilizationMode.rawValue)")
+        let cameraIndex = device.isVirtualDevice
+            ? device.constituentDevices.firstIndex(where: { $0.uniqueID == device.activePrimaryConstituent?.uniqueID }) ?? -1 : 0
+        try frames.append("\(manifest.videoFrames),\(pts.value),\(pts.timescale),\(host),\(relative),\(manifest.width),\(manifest.height),\(matrix),\(device.exposureDuration.seconds),\(device.iso),\(device.lensPosition),\(device.videoZoomFactor),\(connection.activeVideoStabilizationMode.rawValue),\(cameraIndex)")
         manifest.videoFrames += 1
         let duration = CMSampleBufferGetDuration(sample)
         let validDuration = duration.isNumeric && duration.seconds > 0 ? duration : CMTime(value: 1, timescale: CMTimeScale(manifest.requestedFPS))

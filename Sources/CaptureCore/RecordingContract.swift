@@ -79,6 +79,10 @@ public struct RecordingManifest: Codable, Sendable {
     public var hardwareTriggeredSynchronizationEnabled: Bool?
     public var exposureSource = "AVCaptureDevice property sampled at callback; not guaranteed frame-exact"
     public var rollingShutterReadoutMS: Double?
+    public var virtualCamera: Bool?
+    public var constituentCameras: [String]?
+    public var zoomDisplayMultiplier: Double?
+    public var cameraObservationSource: String?
     public var warnings: [String] = []
 
     public init(id: String, createdAt: Date, appVersion: String, deviceModel: String,

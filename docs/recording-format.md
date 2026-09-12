@@ -32,6 +32,8 @@ MC_日期_时间_随机ID/
 - 视频数据连接旋转 0°、关闭镜像；编码保留原始横向像素。竖屏展示仅用视频轨道的 +90° transform，元数据显式记录。
 - 内参从每个 sample buffer 附件读取，CSV 按**行优先**存储 k00…k22，对应未旋转编码像素；缺失记 `nan`。显示旋转时不能直接把原始 K 当成竖屏 K。
 - 曝光、ISO、对焦和倍率是采集回调时读取的设备状态，不宣称与该帧曝光完全精确对应。
+- 0.7.0 增加可选 manifest 字段 `virtualCamera`、`constituentCameras`、`zoomDisplayMultiplier`、`cameraObservationSource`。`frames.csv` 追加 `camera_index_observed`，为 `constituentCameras` 的零起始索引，未知时为 -1。它是回调时的主镜头观测，不表示融合帧的唯一镜头，也不用于代替逐帧 K。
+- 拍摄倍率由 `videoZoomFactor × zoomDisplayMultiplier` 转成界面倍率，与后处理最大裁切分开。系统虚拟相机可在同一会话中切镜头；App 不为变焦重启会话或重设 Writer、视频／IMU 的时间原点。
 - 显式 `.off` 并逐帧记录 `activeVideoStabilizationMode.rawValue`；不保证 OIS 停止。
 - 不提供虚构畸变系数或滚动快门参数。未标定 `rollingShutterReadoutMS` 为空。
 

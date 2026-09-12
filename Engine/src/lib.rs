@@ -234,6 +234,31 @@ mod tests {
         assert_eq!(zoomed[(0,2)],315.); assert_eq!(zoomed[(1,2)],185.);
     }
     #[test]
+    fn native_transform_preserves_intentional_zoom_without_motion() {
+        let mut input = fixture();
+        input.options.allow_black_borders = true;
+        input.options.dynamic_crop = false;
+        input.options.max_crop = 1.;
+        for (i, frame) in input.frames.iter_mut().enumerate() {
+            // Includes an abrupt focal-length change resembling a camera switch.
+            let zoom = if i < 10 { 0.7 + i as f64 * 0.05 } else if i < 20 { 2. } else { 1.2 };
+            frame.k[0] *= zoom; frame.k[4] *= zoom;
+        }
+        let mut engine = create(input).unwrap();
+        for frame in [0, 5, 10, 15, 20, 25] {
+            let mut h = [0f32; 12];
+            assert_eq!(unsafe { mc_engine_transform(&mut engine, frame * 33333, h.as_mut_ptr(), h.len()) }, 0);
+            // A stationary, already-zoomed input must retain its framing; the
+            // stabilizer must not undo the user's zoom using a constant output K.
+            for (x, y) in [(40., 35.), (320., 180.), (590., 325.)] {
+                let w = h[8] * x + h[9] * y + h[10];
+                let sx = (h[0] * x + h[1] * y + h[2]) / w;
+                let sy = (h[4] * x + h[5] * y + h[6]) / w;
+                assert!((sx - x).abs() < 0.01 && (sy - y).abs() < 0.01, "{frame}: {sx},{sy} vs {x},{y}");
+            }
+        }
+    }
+    #[test]
     #[ignore = "requires a physical Metal GPU"]
     fn metal_reprojection_matches_cpu() {
         let mut cpu_config = fixture();
