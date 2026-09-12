@@ -50,6 +50,10 @@ final class RecordingWriter {
             camera: device.deviceType.rawValue, width: Int(size.width), height: Int(size.height),
             stabilizationActive: connection.activeVideoStabilizationMode.rawValue,
             intrinsicsDeliveryEnabled: connection.isCameraIntrinsicMatrixDeliveryEnabled)
+        manifest.maximumAutoExposureSeconds = device.activeMaxExposureDuration.seconds
+        manifest.continuousAutoFocusEnabled = device.focusMode == .continuousAutoFocus
+        manifest.systemTimestampSynchronizationEnabled = true
+        manifest.hardwareTriggeredSynchronizationEnabled = false
         manifest.warnings = ["OIS state is not guaranteed by stabilizationMode=off.",
                              "Rolling shutter readout and lens distortion are uncalibrated."]
         frames = try CSVFile(url: directory.appendingPathComponent("frames.csv"),

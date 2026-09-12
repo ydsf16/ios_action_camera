@@ -102,7 +102,7 @@ struct CameraView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black).foregroundStyle(.white)
         .sheet(isPresented: $showLibrary) { RecordingLibraryView() }
-        .sheet(isPresented: $showSettings) { RecordingSettingsView() }
+        .sheet(isPresented: $showSettings) { RecordingSettingsView(focusLabel: camera.focusLabel) }
         .alert("拍摄提示", isPresented: Binding(get: { camera.message != nil }, set: { if !$0 { camera.message = nil } })) {
             Button("知道了", role: .cancel) { camera.message = nil }
         } message: { Text(camera.message ?? "") }
@@ -169,12 +169,18 @@ private struct CameraPreview: UIViewRepresentable {
 }
 
 private struct RecordingSettingsView: View {
+    let focusLabel: String
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
             List {
                 Section("录制") {
                     LabeledContent("格式", value: "4K / 30fps · SDR")
+                    LabeledContent("自动对焦", value: focusLabel)
+                    LabeledContent("曝光时间上限", value: "5 ms · 1/200 秒")
+                    LabeledContent("视频／IMU 时钟同步", value: "开启")
+                    Text("自动曝光和 ISO 调节保留。使用系统时间戳对齐，不代表硬件触发同步。")
+                        .font(.footnote).foregroundStyle(.secondary)
                     LabeledContent("声音", value: "开启")
                     LabeledContent("方向", value: "竖屏")
                     Text("不支持 4K 的镜头自动使用 1080p。录制期间镜头固定。")
@@ -190,7 +196,7 @@ private struct RecordingSettingsView: View {
                     Text("包含 Gyroflow 1.6.3 · GPLv3").font(.footnote).foregroundStyle(.secondary)
                 }
                 Section {
-                    Text("0.2.2 · 稳定处理原型\n录制结束后自动生成稳定视频，原片始终保留。")
+                    Text("0.2.3 · 稳定处理原型\n录制结束后自动生成稳定视频，原片始终保留。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

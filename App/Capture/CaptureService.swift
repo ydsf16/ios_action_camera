@@ -22,6 +22,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     @Published private(set) var phase: CameraPhase = .preparing
     @Published private(set) var lenses: [CameraLens] = []
     @Published private(set) var selectedLens = ""
+    @Published private(set) var focusLabel = "准备中"
     @Published private(set) var formatLabel = "4K · 30"
     @Published private(set) var duration = 0.0
     @Published private(set) var latestDirectory: URL?
@@ -181,7 +182,8 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
             }
             if connection.isCameraIntrinsicMatrixDeliverySupported { connection.isCameraIntrinsicMatrixDeliveryEnabled = true }
             let size = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
-            publish { $0.selectedLens = lens.id; $0.formatLabel = size.width >= 3840 ? "4K · 30" : "1080p · 30" }
+            let focus = device.focusMode == .continuousAutoFocus ? "连续自动对焦" : "此镜头为固定对焦"
+            publish { $0.focusLabel = focus; $0.selectedLens = lens.id; $0.formatLabel = size.width >= 3840 ? "4K · 30" : "1080p · 30" }
         } catch {
             if session.inputs.contains(replacement) { session.removeInput(replacement) }
             if let previous, session.canAddInput(previous) { session.addInput(previous) }
@@ -210,9 +212,22 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         device.automaticallyAdjustsVideoHDREnabled = false
         if selected.isVideoHDRSupported { device.isVideoHDREnabled = false }
         device.videoZoomFactor = 1
-        if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
-        if device.isExposureModeSupported(.continuousAutoExposure) { device.exposureMode = .continuousAutoExposure }
+        try applyRecordingControlsLocked(device)
         if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) { device.whiteBalanceMode = .continuousAutoWhiteBalance }
+    }
+
+    /// Caller holds the device configuration lock. Reapply after format changes.
+    private func applyRecordingControlsLocked(_ device: AVCaptureDevice) throws {
+        if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
+        guard device.isExposureModeSupported(.continuousAutoExposure) else {
+            throw CaptureFailure.message("此镜头不支持所需的自动曝光。")
+        }
+        let limit = CMTime(value: 5, timescale: 1000)
+        guard CMTimeCompare(device.activeFormat.minExposureDuration, limit) <= 0 else {
+            throw CaptureFailure.message("此格式无法将曝光时间限制到 5 ms。")
+        }
+        device.exposureMode = .continuousAutoExposure
+        device.activeMaxExposureDuration = CMTimeMinimum(limit, device.activeFormat.maxExposureDuration)
     }
 
     func selectLens(_ lens: CameraLens) {
@@ -238,7 +253,21 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         if !session.isRunning { session.startRunning() }
         guard session.isRunning, !session.isInterrupted else { publish { $0.phase = .unavailable }; return }
         startMotion()
-        if recorder == nil { publish { $0.phase = .ready } }
+        if recorder == nil {
+            if let device = cameraInput?.device {
+                let report: [String: Any] = ["focus_mode": device.focusMode.rawValue,
+                    "continuous_autofocus": device.focusMode == .continuousAutoFocus,
+                    "max_exposure_seconds": device.activeMaxExposureDuration.seconds,
+                    "observed_exposure_seconds": device.exposureDuration.seconds,
+                    "system_clock_available": session.synchronizationClock != nil,
+                    "hardware_triggered_sync": false]
+                if let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]) {
+                    let url = Self.recordingsRoot.deletingLastPathComponent().appendingPathComponent("capture-configuration.json")
+                    try? data.write(to: url, options: .atomic)
+                }
+            }
+            publish { $0.phase = .ready }
+        }
     }
 
     func startRecording() {
@@ -255,6 +284,11 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
                 guard session.synchronizationClock != nil else { throw CaptureFailure.message("采集时钟尚未就绪，请重试。") }
                 guard connection.activeVideoStabilizationMode == .off else {
                     throw CaptureFailure.message("系统视频防抖尚未关闭，请重新进入相机。")
+                }
+                do {
+                    try device.lockForConfiguration()
+                    defer { device.unlockForConfiguration() }
+                    try applyRecordingControlsLocked(device)
                 }
                 let recording = try RecordingWriter(root: Self.recordingsRoot, device: device, connection: connection)
                 recorder = recording

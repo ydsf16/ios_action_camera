@@ -69,6 +69,11 @@ public struct RecordingManifest: Codable {
     public var accelerationUnit = "g (includes gravity); gravity.csv is CoreMotion gravity in g"
     public var angularVelocityUnit = "rad/s"
     public var gravityReferenceFrame = "xArbitraryZVertical"
+    // Optional fields preserve decoding of existing recording packages.
+    public var maximumAutoExposureSeconds: Double?
+    public var continuousAutoFocusEnabled: Bool?
+    public var systemTimestampSynchronizationEnabled: Bool?
+    public var hardwareTriggeredSynchronizationEnabled: Bool?
     public var exposureSource = "AVCaptureDevice property sampled at callback; not guaranteed frame-exact"
     public var rollingShutterReadoutMS: Double?
     public var warnings: [String] = []

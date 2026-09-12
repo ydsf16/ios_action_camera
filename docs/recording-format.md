@@ -43,3 +43,14 @@ MC_日期_时间_随机ID/
 - 现有 SensorRecorder 参考版本：[1.5 采集实现](https://github.com/ydsf16/ios_sensor_recorder/tree/aeab12eda455d4929676ed48a55da076acbabbe4)
 
 此包目前不是 SensorRecorder 原 CSV 布局，也不是直接可打开的 Gyroflow 工程；下一阶段将添加适配器。
+
+## 0.2.3 录制策略
+
+- 支持时使用 `continuousAutoFocus`；固定对焦镜头不伪报自动对焦开启。
+- 在选择格式后、录制开始前设置 `continuousAutoExposure` 和 `activeMaxExposureDuration ≤ 0.005 s`，ISO 继续自动调节。曝光上限通过 Apple 的自动曝光上限 API 设置，不以降低帧率实现。
+- 视频 PTS 使用 `CMSyncConvertTime` 映射到 host clock，CoreMotion 保留原始采样时间；缺少采集同步时钟时拒绝录制。这是系统时间戳同步，未实现共同硬件触发采样。
+- manifest 新增可选字段 `maximumAutoExposureSeconds`、`continuousAutoFocusEnabled`、`systemTimestampSynchronizationEnabled`、`hardwareTriggeredSynchronizationEnabled`，兼容旧录制包；后者明确为 false。
+- `frames.csv` 中已有的曝光／ISO／焦点列仍是回调时观察值，不承诺逐帧精确曝光元数据。
+- 前台相机就绪后，将配置读回值写入 Documents/capture-configuration.json，供真机验证。
+
+官方说明：[自动曝光上限](https://developer.apple.com/documentation/avfoundation/avcapturedevice/activemaxexposureduration)、[采集同步时钟](https://developer.apple.com/documentation/avfoundation/avcapturesession/synchronizationclock)。
