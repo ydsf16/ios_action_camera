@@ -65,3 +65,17 @@ python3 scripts/make_export_fixture.py /tmp/MC_Synthetic_Export_Test
 - iOS 签名 Debug / Simulator Debug 编译通过，静态链接检查通过。0.3.0 已安装并在 iPhone 16 启动；模拟器横屏界面布局检查通过，手机实际旋转录制方向仍需验收。
 - 模拟器使用真实录制的 81 帧素材，实际通过 UI 将强度改为 85%，开启允许黑边，保留动态裁切和 2× 上限；重新生成完成，receipt 记录这组参数，预览返回稳定结果，上一版被成功替换。
 - 像素缓冲旋转仍为 0，录制时选择显示矩阵，稳定输出沿用原片矩阵；时间戳转换与 CoreMotion 采样未改变。
+
+### Full-screen playback and border controls (2026-09-12)
+
+- Clip preview now opens full screen with play/pause, seeking, original/result switch,
+  processing status, settings and export overlaid. Tap the picture to hide controls.
+  Aspect-fit preserves the encoded frame and its stabilization borders.
+- Enabling Allow black borders selects fixed 1x crop. Users can subsequently adjust
+  crop or enable dynamic crop; the panel explains that either can remove borders.
+  Existing saved settings remain intact; a one-tap full-FOV button resets them.
+- CPU pixel regression with identical synthetic motion and smoothing: four frames
+  contain 81,045 black pixels at 1x and zero at 2x. Eight Rust tests and six Swift
+  tests pass. Device and simulator builds pass; static-link audit passes.
+- Simulator full-screen landscape playback and overlay layout inspected. Device
+  unavailable during this validation; this build has not been installed on iPhone.

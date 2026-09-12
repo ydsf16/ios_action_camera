@@ -259,6 +259,36 @@ mod tests {
         }
     }
     #[test]
+    fn allowed_borders_are_rendered_and_crop_removes_them() {
+        let mut counts = Vec::new();
+        for crop in [1.0, 2.0] {
+            let mut config = fixture();
+            config.options.allow_black_borders = true;
+            config.options.dynamic_crop = false;
+            config.options.max_crop = crop;
+            config.options.strength = 1.0;
+            for sample in &mut config.gyro {
+                sample.gyro = [0., 0., (sample.timestamp_ms / 100.).sin() * 2.];
+            }
+            let mut e = create(config).unwrap();
+            let mut input = vec![255u8; 640*360*4];
+            let mut output = vec![0u8; 640*360*4];
+            let mut error = vec![0i8; 1024];
+            let mut black = 0;
+            for timestamp in [200000, 400000, 600000, 800000] {
+                let status = unsafe { mc_engine_process(&mut e, timestamp,
+                    input.as_mut_ptr(), input.len(), 2560,
+                    output.as_mut_ptr(), output.len(), 2560, error.as_mut_ptr(), error.len()) };
+                assert_eq!(status, 0);
+                black += output.chunks_exact(4).filter(|p| p[0] == 0 && p[1] == 0 && p[2] == 0).count();
+            }
+            counts.push(black);
+        }
+        println!("black pixels across four frames: 1x={}, 2x={}", counts[0], counts[1]);
+        assert!(counts[0] > 1000);
+        assert!(counts[1] < counts[0]);
+    }
+    #[test]
     fn malformed_time_is_rejected() {
         let mut input=fixture(); input.gyro[2].timestamp_ms=input.gyro[1].timestamp_ms;
         assert!(create(input).is_err());

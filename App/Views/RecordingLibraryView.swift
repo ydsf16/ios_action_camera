@@ -33,7 +33,7 @@ struct RecordingLibraryView: View {
             }
             .navigationTitle("素材")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
-            .sheet(item: $selected) { ClipPreviewView(clip: $0) }
+            .fullScreenCover(item: $selected) { ClipPreviewView(clip: $0) }
             .task { await loadClips() }
             .alert("素材读取失败", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
                 Button("知道了", role: .cancel) { failure = nil }
@@ -101,6 +101,11 @@ private struct ClipPreviewView: View {
     @State private var saved = false
     @State private var message: String?
     @State private var showAdjustment = false
+    @State private var controlsVisible = true
+    private var duration: Double {
+        let seconds = player?.currentItem?.duration.seconds ?? 0
+        return seconds.isFinite && seconds > 0 ? seconds : max(clip.manifest.durationSeconds, 0.1)
+    }
     private var busy: Bool {
         switch jobs.states[clip.id] { case .queued, .processing: return true; default: return false }
     }
@@ -112,48 +117,79 @@ private struct ClipPreviewView: View {
     }
     private var playbackURL: URL { hasStable && !showOriginal ? stableURL : clip.video }
     var body: some View {
-        NavigationStack {
-            ScrollView { VStack(spacing: 16) {
-                if clip.canPlay { VideoPlayer(player: player).frame(minHeight: 220, idealHeight: 360) }
-                else { ContentUnavailableView("录制未完成", systemImage: "exclamationmark.triangle", description: Text("已有文件仍保存在本机，可通过“文件”App 导出检查。")) }
-                Text(hasStable ? (showOriginal ? "原片" : "稳定结果") : "原片")
-                    .font(.footnote).foregroundStyle(.secondary).padding(.horizontal)
-                if hasStable {
-                    Button(showOriginal ? "查看稳定结果" : "查看原片") {
-                        let time = player?.currentTime() ?? .zero
-                        player?.pause(); showOriginal.toggle()
-                        player = AVPlayer(url: playbackURL); player?.seek(to: time)
-                        saved = false
-                    }
-                }
-                Group {
-                    switch jobs.states[clip.id] {
-                    case .queued: Text("等待稳定处理").font(.footnote)
-                    case let .processing(fraction):
-                        ProgressView("正在稳定处理 \(Int(fraction*100))%", value: fraction).padding(.horizontal)
-                        Button("取消") { jobs.cancel(clip.directory) }.font(.footnote)
-                    case let .failed(error):
-                        Text(error).font(.footnote).foregroundStyle(.orange).padding(.horizontal)
-                        Button("重试稳定处理") { jobs.enqueue(clip.directory) }
-                    default:
-                        if !hasStable { Button("生成稳定视频") { jobs.enqueue(clip.directory) }.disabled(!clip.canPlay) }
-                    }
-                }
-                Button("调整稳定参数") { showAdjustment = true }.disabled(busy || saving || !clip.canPlay)
-                Button {
-                    Task { await saveToPhotos() }
-                } label: {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if clip.canPlay {
+                FullFramePlayer(player: player).ignoresSafeArea()
+                    .contentShape(Rectangle()).onTapGesture { withAnimation { controlsVisible.toggle() } }
+            }
+            if controlsVisible {
+                VStack {
                     HStack {
-                        if saving { ProgressView().tint(.white) }
-                        Text(saving ? "正在保存…" : (saved ? "已保存到相册" : "保存到相册"))
-                    }.frame(maxWidth: .infinity).padding(.vertical, 10)
-                }
-                .buttonStyle(.borderedProminent).disabled(saving || saved || busy || !clip.canPlay).padding(.horizontal)
-                .padding(.bottom)
+                        Button { dismiss() } label: { Image(systemName: "xmark").padding(12) }
+                            .accessibilityLabel("关闭预览")
+                        Spacer()
+                        Text(hasStable && !showOriginal ? "稳定结果" : "原片")
+                        Spacer()
+                        if hasStable {
+                            Button(showOriginal ? "看稳定结果" : "看原片") {
+                                let time = player?.currentTime() ?? .zero
+                                let playing = (player?.rate ?? 0) > 0
+                                player?.pause(); showOriginal.toggle()
+                                player = AVPlayer(url: playbackURL)
+                                player?.seek(to: time)
+                                if playing { player?.play() }
+                                saved = false
+                            }
+                        }
+                    }.padding(.horizontal).padding(.bottom, 16)
+                        .background(LinearGradient(colors: [.black.opacity(0.8), .clear], startPoint: .top, endPoint: .bottom))
+                    Spacer()
+                    VStack(spacing: 10) {
+                        if !clip.canPlay { Text("录制未完成，已有文件保留在本机。") }
+                        switch jobs.states[clip.id] {
+                        case .queued: Text("等待稳定处理").font(.footnote)
+                        case let .processing(fraction):
+                            HStack {
+                                ProgressView("正在稳定处理 \(Int(fraction * 100))%", value: fraction)
+                                Button("取消") { jobs.cancel(clip.directory) }
+                            }
+                        case let .failed(error):
+                            Text(error).font(.footnote).foregroundStyle(.orange).lineLimit(3)
+                            Button("重试稳定处理") { jobs.enqueue(clip.directory) }
+                        default:
+                            if !hasStable { Button("生成稳定视频") { jobs.enqueue(clip.directory) }.disabled(!clip.canPlay) }
+                        }
+                        TimelineView(.periodic(from: .now, by: 0.25)) { _ in
+                            HStack {
+                                Button {
+                                    guard let player else { return }
+                                    if player.rate > 0 { player.pause() }
+                                    else {
+                                        if player.currentTime().seconds >= duration - 0.1 { player.seek(to: .zero) }
+                                        player.play()
+                                    }
+                                } label: { Image(systemName: (player?.rate ?? 0) > 0 ? "pause.fill" : "play.fill").frame(width: 36, height: 36) }
+                                .accessibilityLabel((player?.rate ?? 0) > 0 ? "暂停" : "播放")
+                                Slider(value: Binding(get: {
+                                    let value = player?.currentTime().seconds ?? 0
+                                    return value.isFinite ? min(max(value, 0), duration) : 0
+                                }, set: { player?.seek(to: CMTime(seconds: $0, preferredTimescale: 600)) }), in: 0...duration)
+                                .accessibilityLabel("播放进度")
+                            }
+                        }
+                        HStack {
+                            Button("调整稳定参数") { showAdjustment = true }.disabled(busy || saving || !clip.canPlay)
+                            Spacer()
+                            Button(saving ? "正在保存…" : (saved ? "已保存到相册" : "保存到相册")) {
+                                Task { await saveToPhotos() }
+                            }.disabled(saving || saved || busy || !clip.canPlay)
+                        }.buttonStyle(.bordered)
+                    }.padding().background(LinearGradient(colors: [.clear, .black.opacity(0.85)], startPoint: .top, endPoint: .bottom))
+                }.foregroundStyle(.white).tint(.white)
             }
-            }
-            .navigationTitle("预览").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+        }
+            .statusBarHidden()
             .task { if clip.canPlay { player = AVPlayer(url: playbackURL) } }
             .sheet(isPresented: $showAdjustment) {
                 NavigationStack { StabilizationSettingsView(directory: clip.directory)
@@ -170,7 +206,6 @@ private struct ClipPreviewView: View {
             .alert("保存提示", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
                 Button("知道了", role: .cancel) { message = nil }
             } message: { Text(message ?? "") }
-        }
     }
 
     @MainActor
@@ -188,5 +223,21 @@ private struct ClipPreviewView: View {
             }
             saved = true
         } catch { message = error.localizedDescription }
+    }
+}
+
+// Preserve the encoded frame, including stabilization borders, at either orientation.
+private struct FullFramePlayer: UIViewRepresentable {
+    var player: AVPlayer?
+    func makeUIView(context: Context) -> PlayerSurface { PlayerSurface() }
+    func updateUIView(_ view: PlayerSurface, context: Context) { view.playerLayer.player = player }
+    final class PlayerSurface: UIView {
+        override class var layerClass: AnyClass { AVPlayerLayer.self }
+        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            playerLayer.videoGravity = .resizeAspect
+        }
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     }
 }

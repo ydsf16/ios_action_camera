@@ -19,13 +19,21 @@ struct StabilizationSettingsView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("裁切与画面边缘") {
-                LabeledContent("最大裁切", value: String(format: "%.1f×", options.maxCrop))
+                LabeledContent(options.dynamicCrop ? "最大裁切" : "固定裁切", value: String(format: "%.1f×", options.maxCrop))
                 Slider(value: $options.maxCrop, in: 1...5, step: 0.1)
                 Toggle("动态裁切", isOn: $options.dynamicCrop)
                 Toggle("允许黑边", isOn: $options.allowBlackBorders)
+                    .onChange(of: options.allowBlackBorders) { _, allowed in
+                        if allowed { options.dynamicCrop = false; options.maxCrop = 1 }
+                    }
+                if options.allowBlackBorders {
+                    Button("保留完整视野（1×，不动态裁切）") {
+                        options.dynamicCrop = false; options.maxCrop = 1
+                    }
+                }
                 Text(options.dynamicCrop ? "按运动自动缩放，最多达到上述倍数；不是固定放大倍数。" : "使用上述固定裁切倍数，整段画面不动态缩放。")
                     .font(.footnote).foregroundStyle(.secondary)
-                Text(options.allowBlackBorders ? "保留所选稳定强度；裁切不足时显示黑色边缘。" : "裁切不足时会降低平滑强度；仍无法覆盖边缘时提示调整参数。")
+                Text(options.allowBlackBorders ? "开启时默认使用 1× 固定裁切，保留稳定强度和视野，运动后露出的区域显示黑色。手动增加裁切或开启动态裁切会减少黑边。" : "裁切不足时会降低平滑强度；仍无法覆盖边缘时提示调整参数。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section {
