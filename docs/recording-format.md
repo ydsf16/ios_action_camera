@@ -72,3 +72,18 @@ rotation/stabilization only when changed, and does not subscribe to processing-j
 progress. These guard against redundant preview reconfiguration; the user's elevator
 lighting symptom is specifically addressed through the exposure policy, not claimed
 resolved by UI changes alone.
+
+## Exposure policy (0.4.2)
+
+`balanced` adds a 10 ms continuous-AE maximum between the existing `automatic` and
+`motion` choices. It is an exposure ceiling, not a fixed 1/100 s shutter or a
+measured flicker-frequency lock. ISO remains automatic; low light may produce
+more noise or underexposure at the device's ISO limit. Existing saved choices and
+the original `motion` fallback are preserved. `capture-configuration.json` also
+includes `observed_iso` beside the observed duration for device validation.
+
+The user reported that `automatic` eliminated visible elevator-light flicker but
+increased motion blur. The new 10 ms ceiling is a candidate compromise, pending
+same-scene device validation; no exposure measurements of that scene are yet
+available. A 1/100 s shutter is a common choice for 50 Hz lighting, while LED PWM
+may require another duration. See [Sony's shutter recommendations](https://www.sony.com/electronics/support/camcorders-and-video-cameras-hard-drive-camcorders/articles/00122281).

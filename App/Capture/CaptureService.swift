@@ -231,15 +231,15 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         }
         let selected = policy ?? activeExposurePolicy
         device.exposureMode = .continuousAutoExposure
-        if selected == .automatic {
-            // AVFoundation explicitly defines .invalid as restoring its per-format AE default.
-            device.activeMaxExposureDuration = .invalid
-        } else {
-            let limit = CMTime(value: 5, timescale: 1000)
+        if let milliseconds = selected.maximumExposureMilliseconds {
+            let limit = CMTime(value: milliseconds, timescale: 1000)
             guard CMTimeCompare(device.activeFormat.minExposureDuration, limit) <= 0 else {
-                throw CaptureFailure.message("此格式无法将曝光时间限制到 5 ms。")
+                throw CaptureFailure.message("此格式无法将曝光时间限制到 \(milliseconds) ms。")
             }
             device.activeMaxExposureDuration = CMTimeMinimum(limit, device.activeFormat.maxExposureDuration)
+        } else {
+            // AVFoundation explicitly defines .invalid as restoring its per-format AE default.
+            device.activeMaxExposureDuration = .invalid
         }
     }
 
@@ -295,6 +295,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
             "exposure_policy": activeExposurePolicy.rawValue, "exposure_mode": device.exposureMode.rawValue,
             "max_exposure_seconds": maximum.isFinite ? maximum as Any : NSNull(),
             "observed_exposure_seconds": device.exposureDuration.seconds,
+            "observed_iso": device.iso,
             "system_clock_available": session.synchronizationClock != nil,
             "hardware_triggered_sync": false, "updated_at": ISO8601DateFormatter().string(from: Date())]
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]) {
