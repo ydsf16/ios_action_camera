@@ -107,6 +107,18 @@ struct CameraView: View {
             Button("知道了", role: .cancel) { camera.message = nil }
         } message: { Text(camera.message ?? "") }
         .task {
+            #if DEBUG
+            // Device regression runner uses the same queue and exporter as the UI.
+            let args = ProcessInfo.processInfo.arguments
+            if let index = args.firstIndex(of: "--stabilize-recording"), index + 1 < args.count {
+                let name = args[index + 1]
+                if name.hasPrefix("MC_"), !name.contains("/"), !name.contains("..") {
+                    showLibrary = true
+                    jobs.enqueue(CaptureService.recordingsRoot.appendingPathComponent(name))
+                    return
+                }
+            }
+            #endif
             camera.setActive(scenePhase == .active)
             await camera.prepare()
         }
@@ -178,7 +190,7 @@ private struct RecordingSettingsView: View {
                     Text("包含 Gyroflow 1.6.3 · GPLv3").font(.footnote).foregroundStyle(.secondary)
                 }
                 Section {
-                    Text("0.2.1 · 稳定处理原型\n录制结束后自动生成稳定视频，原片始终保留。")
+                    Text("0.2.2 · 稳定处理原型\n录制结束后自动生成稳定视频，原片始终保留。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

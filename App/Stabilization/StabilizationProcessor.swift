@@ -22,13 +22,23 @@ final class ProcessingControl: @unchecked Sendable {
 enum StabilizationProcessor {
     static let filename = "stabilized.mov"
     static func process(directory: URL, control: ProcessingControl, progress: @escaping (Double) -> Void) async throws -> URL {
+        func mark(_ stage: String) {
+            let state = ["stage": stage, "updated_at": ISO8601DateFormatter().string(from: Date())]
+            if let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]) {
+                try? data.write(to: directory.appendingPathComponent("processing-status.json"), options: .atomic)
+            }
+        }
+        mark("reading-input")
         let config = try StabilizationInput.load(directory: directory)
         let json = String(decoding: try JSONEncoder().encode(config), as: UTF8.self)
         var errorBuffer = [CChar](repeating: 0, count: 2048)
+        mark("waiting-for-capture")
         try control.checkpoint()
+        mark("initializing-core")
         guard let engine = json.withCString({ mc_engine_create($0, &errorBuffer, errorBuffer.count) }) else {
             throw InputError("稳定引擎初始化失败：\(String(cString: errorBuffer))")
         }
+        mark("loading-video-track")
         defer { mc_engine_destroy(engine) }
         let original = directory.appendingPathComponent("video.mov")
         let destination = directory.appendingPathComponent(filename)
@@ -42,6 +52,7 @@ enum StabilizationProcessor {
         videoReader.alwaysCopiesSampleData = false
         guard reader.canAdd(videoReader) else { throw InputError("无法解码视频。") }
         reader.add(videoReader)
+        mark("loading-audio-track")
         let audioTrack = try await asset.loadTracks(withMediaType: .audio).first
         var audioReader: AVAssetReaderTrackOutput?
         if let track = audioTrack {
@@ -68,12 +79,17 @@ enum StabilizationProcessor {
             guard writer.canAdd(input) else { throw InputError("无法保留原片声音。") }
             writer.add(input); audioWriter = input
         }
+        mark("starting-codecs")
         guard writer.startWriting(), reader.startReading() else { throw writer.error ?? reader.error ?? InputError("无法开始处理素材。") }
         writer.startSession(atSourceTime: .zero)
         var completed = false
-        defer { if !completed { reader.cancelReading(); writer.cancelWriting() } }
+        var audioTask: Task<Void, Error>?
+        defer {
+            if !completed {
+                control.cancel(); reader.cancelReading(); writer.cancelWriting(); audioTask?.cancel()
+            }
+        }
         guard let pool = adaptor.pixelBufferPool else { throw InputError("无法分配视频缓存。") }
-        var nextAudio = audioReader?.copyNextSampleBuffer()
         func waitForInput(_ input: AVAssetWriterInput) throws {
             var waited = 0
             while !input.isReadyForMoreMediaData {
@@ -84,19 +100,25 @@ enum StabilizationProcessor {
                 waited += 1
             }
         }
-        func appendAudio(until timestamp: Double) throws {
-            while let sample = nextAudio, CMSampleBufferGetPresentationTimeStamp(sample).seconds <= timestamp {
-                try control.checkpoint()
-                if let input = audioWriter {
-                    try waitForInput(input)
-                    guard input.append(sample) else { throw writer.error ?? InputError("声音写入失败。") }
+        // Each writer input must progress independently. Compressed audio samples
+        // may contain many packets; a timestamp-based sequential loop can deadlock
+        // when the video input applies backpressure while waiting for more audio/EOF.
+        if let audioReader, let audioWriter {
+            audioTask = Task.detached(priority: .utility) {
+                defer { audioWriter.markAsFinished() }
+                while let sample = audioReader.copyNextSampleBuffer() {
+                    try control.checkpoint()
+                    try waitForInput(audioWriter)
+                    guard audioWriter.append(sample) else { throw writer.error ?? InputError("声音写入失败。") }
                 }
-                nextAudio = audioReader?.copyNextSampleBuffer()
+                guard reader.status != .failed else { throw reader.error ?? InputError("声音读取失败。") }
             }
         }
         var count = 0
         var endTime = CMTime.zero
+        mark("reading-first-video")
         while let sample = videoReader.copyNextSampleBuffer() {
+            if count % 15 == 0 { mark("processing-frame-\(count)") }
             try control.checkpoint()
             try autoreleasepool {
                 let pts = CMSampleBufferGetPresentationTimeStamp(sample)
@@ -119,7 +141,6 @@ enum StabilizationProcessor {
                     dst.assumingMemoryBound(to: UInt8.self), CVPixelBufferGetDataSize(result), CVPixelBufferGetBytesPerRow(result),
                     &errorBuffer, errorBuffer.count)
                 guard code == 0 else { throw InputError("稳定处理失败：\(String(cString: errorBuffer))") }
-                try appendAudio(until: pts.seconds + 0.1)
                 try waitForInput(videoWriter)
                 guard adaptor.append(result, withPresentationTime: pts) else { throw writer.error ?? InputError("输出帧写入失败。") }
                 let duration = CMSampleBufferGetDuration(sample)
@@ -129,9 +150,11 @@ enum StabilizationProcessor {
             }
         }
         guard reader.status != .failed, count == config.frames.count else { throw reader.error ?? InputError("解码帧数不完整。") }
-        try appendAudio(until: .infinity)
+        videoWriter.markAsFinished()
+        mark("waiting-for-audio")
+        try await audioTask?.value
         writer.endSession(atSourceTime: endTime)
-        videoWriter.markAsFinished(); audioWriter?.markAsFinished()
+        mark("finishing-container")
         await writer.finishWriting()
         try control.checkpoint()
         guard writer.status == .completed else { throw writer.error ?? InputError("稳定视频封装失败。") }
@@ -143,6 +166,7 @@ enum StabilizationProcessor {
         if FileManager.default.fileExists(atPath: destination.path) {
             _ = try FileManager.default.replaceItemAt(destination,withItemAt:temporary)
         } else { try FileManager.default.moveItem(at:temporary,to:destination) }
+        mark("completed")
         completed = true; progress(1)
         return destination
     }

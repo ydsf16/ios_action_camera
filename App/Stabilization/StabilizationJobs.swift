@@ -53,6 +53,11 @@ final class StabilizationJobs: ObservableObject {
         switch result {
         case .success: states[directory.lastPathComponent] = .ready
         case let .failure(error):
+            let diagnostic = ["stage": "failed", "error": error.localizedDescription,
+                              "updated_at": ISO8601DateFormatter().string(from: Date())]
+            if let data = try? JSONSerialization.data(withJSONObject: diagnostic, options: [.sortedKeys]) {
+                try? data.write(to: directory.appendingPathComponent("processing-status.json"), options: .atomic)
+            }
             states[directory.lastPathComponent] = .failed(error is CancellationError ? "处理已停止，返回前台后可重试。" : error.localizedDescription)
         }
         active = nil; control = nil; next()
