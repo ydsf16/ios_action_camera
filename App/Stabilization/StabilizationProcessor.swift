@@ -21,7 +21,7 @@ final class ProcessingControl: @unchecked Sendable {
 /// Offline worker. Native pixel orientation and original movie PTS are preserved.
 enum StabilizationProcessor {
     static let filename = "stabilized.mov"
-    static func process(directory: URL, control: ProcessingControl, progress: @escaping (Double) -> Void) async throws -> URL {
+    static func process(directory: URL, options: StabilizationOptions, control: ProcessingControl, progress: @escaping (Double) -> Void) async throws -> URL {
         func mark(_ stage: String) {
             let state = ["stage": stage, "updated_at": ISO8601DateFormatter().string(from: Date())]
             if let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]) {
@@ -29,7 +29,7 @@ enum StabilizationProcessor {
             }
         }
         mark("reading-input")
-        let config = try StabilizationInput.load(directory: directory)
+        let config = try StabilizationInput.load(directory: directory, options: options)
         let json = String(decoding: try JSONEncoder().encode(config), as: UTF8.self)
         var errorBuffer = [CChar](repeating: 0, count: 2048)
         mark("waiting-for-capture")
@@ -158,7 +158,7 @@ enum StabilizationProcessor {
         await writer.finishWriting()
         try control.checkpoint()
         guard writer.status == .completed else { throw writer.error ?? InputError("稳定视频封装失败。") }
-        let receipt: [String:Any] = ["engine":"Gyroflow 1.6.3", "backend":"CPU", "input_frames":count,"output_width":config.output_width,
+        let receipt: [String:Any] = ["engine":"Gyroflow 1.6.3", "backend":"CPU", "options": try JSONSerialization.jsonObject(with: JSONEncoder().encode(options)), "input_frames":count,"output_width":config.output_width,
             "output_height":config.output_height,"rolling_shutter":false,"horizon_lock":false,
             "lens_model":"recorded per-frame K; uncalibrated zero residual distortion", "created_at":ISO8601DateFormatter().string(from:Date())]
         try JSONSerialization.data(withJSONObject:receipt,options:[.prettyPrinted,.sortedKeys])

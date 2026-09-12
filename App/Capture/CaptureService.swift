@@ -45,6 +45,11 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     private var acceptsMotion = false
     private var configured = false
     private var wantsActive = false
+    private var recordingRotationDegrees = 90
+    func setRecordingRotation(_ degrees: Int) {
+        guard [0, 90, 180, 270].contains(degrees) else { return }
+        queue.async { self.recordingRotationDegrees = degrees }
+    }
     private var histories = ["gyro": SampleHistory(), "accelerometer": SampleHistory(), "gravity": SampleHistory()]
     private var latestMotionTime: [String: Double] = [:]
     private var observers: [NSObjectProtocol] = []
@@ -290,7 +295,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
                     defer { device.unlockForConfiguration() }
                     try applyRecordingControlsLocked(device)
                 }
-                let recording = try RecordingWriter(root: Self.recordingsRoot, device: device, connection: connection)
+                let recording = try RecordingWriter(root: Self.recordingsRoot, device: device, connection: connection, rotationDegrees: recordingRotationDegrees)
                 recorder = recording
                 acceptsMotion = true
                 for kind in ["gyro", "accelerometer", "gravity"] {

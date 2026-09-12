@@ -4,6 +4,7 @@ import Foundation
 public struct StabilizationInput: Codable {
     public struct Frame: Codable { public let timestamp_us: Int64; public let k: [Double] }
     public struct Gyro: Codable { public let timestamp_ms: Double; public let gyro: [Double] }
+    public var options = StabilizationOptions()
     public let width: Int
     public let height: Int
     public let output_width: Int
@@ -13,7 +14,8 @@ public struct StabilizationInput: Codable {
     public let frames: [Frame]
     public let gyro: [Gyro]
 
-    public static func load(directory: URL) throws -> Self {
+    public static func load(directory: URL, options: StabilizationOptions = .init()) throws -> Self {
+        guard options.isValid else { throw InputError("稳定参数无效。") }
         let manifest = try RecordingManifest.read(from: directory.appendingPathComponent("manifest.json"))
         guard manifest.status == "complete", manifest.videoFrames > 1,
               manifest.pixelBufferRotationDegrees == 0, !manifest.mirrored else {
@@ -49,7 +51,7 @@ public struct StabilizationInput: Codable {
         let width = manifest.width, height = manifest.height
         guard width >= 1920, width <= 4096, height > 0, height <= 4096 else { throw InputError("录制尺寸暂不支持。") }
         let outWidth = 1920, outHeight = Int((Double(height) * 1920 / Double(width) / 2).rounded()) * 2
-        return Self(width: width, height: height, output_width: outWidth, output_height: outHeight,
+        return Self(options: options, width: width, height: height, output_width: outWidth, output_height: outHeight,
             duration_ms: manifest.durationSeconds * 1000, fps: Double(manifest.requestedFPS),
             frames: video.indices.map { Frame(timestamp_us: Int64((video[$0]*1e6).rounded()), k: matrices[$0]) },
             gyro: times.indices.map { Gyro(timestamp_ms: map.videoSeconds(for: times[$0])*1000, gyro: [gx[$0],gy[$0],gz[$0]]) })

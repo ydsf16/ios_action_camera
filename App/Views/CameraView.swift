@@ -5,6 +5,7 @@ struct CameraView: View {
     @StateObject private var camera = CaptureService()
     @ObservedObject private var jobs = StabilizationJobs.shared
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var showLibrary = false
     @State private var showSettings = false
 
@@ -12,16 +13,16 @@ struct CameraView: View {
 
     var body: some View {
         ZStack {
-            CameraPreview(session: camera.session)
+            CameraPreview(session: camera.session, rotationChanged: camera.setRecordingRotation)
                 .ignoresSafeArea()
 
             // Subtle scrims keep controls readable without reserving space in the viewfinder.
             VStack(spacing: 0) {
                 LinearGradient(colors: [.black.opacity(0.6), .clear], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 170)
+                    .frame(height: verticalSizeClass == .compact ? 80 : 170)
                 Spacer(minLength: 0)
                 LinearGradient(colors: [.clear, .black.opacity(0.65)], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 300)
+                    .frame(height: verticalSizeClass == .compact ? 160 : 300)
             }
             .ignoresSafeArea()
             .allowsHitTesting(false)
@@ -77,7 +78,16 @@ struct CameraView: View {
                         }.accessibilityLabel("素材").disabled(recording || camera.phase == .finishing)
                         Spacer()
                         Button {
-                            if recording { camera.stopRecording() } else { camera.startRecording() }
+                            if recording { camera.stopRecording() } else {
+                                switch UIDevice.current.orientation {
+                                case .portrait: camera.setRecordingRotation(90)
+                                case .portraitUpsideDown: camera.setRecordingRotation(270)
+                                case .landscapeLeft: camera.setRecordingRotation(0)
+                                case .landscapeRight: camera.setRecordingRotation(180)
+                                default: break // Flat/unknown keeps the current preview orientation.
+                                }
+                                camera.startRecording()
+                            }
                         } label: {
                             ZStack {
                                 Circle().fill(.black.opacity(0.2)).frame(width: 78, height: 78)
@@ -106,6 +116,8 @@ struct CameraView: View {
         .alert("拍摄提示", isPresented: Binding(get: { camera.message != nil }, set: { if !$0 { camera.message = nil } })) {
             Button("知道了", role: .cancel) { camera.message = nil }
         } message: { Text(camera.message ?? "") }
+        .onAppear { UIDevice.current.beginGeneratingDeviceOrientationNotifications() }
+        .onDisappear { UIDevice.current.endGeneratingDeviceOrientationNotifications() }
         .task {
             #if DEBUG
             // Device regression runner uses the same queue and exporter as the UI.
@@ -148,19 +160,30 @@ struct CameraView: View {
 
 private struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
+    var rotationChanged: (Int) -> Void
     class PreviewView: UIView {
+        var rotationChanged: ((Int) -> Void)?
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
         var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
         override func layoutSubviews() {
             super.layoutSubviews()
-            if let connection = previewLayer.connection, connection.isVideoRotationAngleSupported(90) {
-                connection.videoRotationAngle = 90
+            let angle: Int
+            switch window?.windowScene?.interfaceOrientation {
+            case .landscapeLeft: angle = 180
+            case .landscapeRight: angle = 0
+            case .portraitUpsideDown: angle = 270
+            default: angle = 90
+            }
+            rotationChanged?(angle)
+            if let connection = previewLayer.connection, connection.isVideoRotationAngleSupported(CGFloat(angle)) {
+                connection.videoRotationAngle = CGFloat(angle)
                 connection.preferredVideoStabilizationMode = .off
             }
         }
     }
     func makeUIView(context: Context) -> PreviewView {
         let view = PreviewView()
+        view.rotationChanged = rotationChanged
         view.previewLayer.session = session
         view.previewLayer.videoGravity = .resizeAspectFill
         return view
@@ -182,9 +205,12 @@ private struct RecordingSettingsView: View {
                     Text("自动曝光和 ISO 调节保留。使用系统时间戳对齐，不代表硬件触发同步。")
                         .font(.footnote).foregroundStyle(.secondary)
                     LabeledContent("声音", value: "开启")
-                    LabeledContent("方向", value: "竖屏")
+                    LabeledContent("方向", value: "自动横竖屏")
                     Text("不支持 4K 的镜头自动使用 1080p。录制期间镜头固定。")
                         .font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("稳定处理") {
+                    NavigationLink("默认稳定参数") { StabilizationSettingsView() }
                 }
                 Section("保存") {
                     Text("视频和运动数据保存在本机，可从素材预览保存视频到相册。")
@@ -196,7 +222,7 @@ private struct RecordingSettingsView: View {
                     Text("包含 Gyroflow 1.6.3 · GPLv3").font(.footnote).foregroundStyle(.secondary)
                 }
                 Section {
-                    Text("0.2.3 · 稳定处理原型\n录制结束后自动生成稳定视频，原片始终保留。")
+                    Text("0.3.0 · 方向与稳定参数\n录制结束后自动生成稳定视频，原片始终保留。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

@@ -9,8 +9,15 @@ use std::{ffi::{c_char, CStr}, panic::{catch_unwind, AssertUnwindSafe}};
 struct Frame { timestamp_us: i64, k: [f64; 9] }
 #[derive(Deserialize)]
 struct Gyro { timestamp_ms: f64, gyro: [f64; 3] }
+#[derive(Deserialize, Clone)]
+#[serde(default, rename_all = "camelCase")]
+struct Options { strength: f64, max_crop: f64, dynamic_crop: bool, allow_black_borders: bool }
+impl Default for Options {
+    fn default() -> Self { Self { strength: 0.5, max_crop: 2.0, dynamic_crop: true, allow_black_borders: false } }
+}
 #[derive(Deserialize)]
 struct Config {
+    #[serde(default)] options: Options,
     width: usize, height: usize, output_width: usize, output_height: usize,
     duration_ms: f64, fps: f64, frames: Vec<Frame>, gyro: Vec<Gyro>,
 }
@@ -28,6 +35,10 @@ fn create(config: Config) -> Result<Engine, String> {
         || config.frames.iter().any(|f| f.k.iter().any(|x| !x.is_finite()) || f.k[0] <= 0.0 || f.k[4] <= 0.0)
         || config.gyro.iter().any(|g| !g.timestamp_ms.is_finite() || g.gyro.iter().any(|x| !x.is_finite())) {
         return Err("Non-monotonic timestamps or invalid calibration values".into());
+    }
+    if !config.options.strength.is_finite() || !(0.0..=1.0).contains(&config.options.strength)
+        || !config.options.max_crop.is_finite() || !(1.0..=5.0).contains(&config.options.max_crop) {
+        return Err("Invalid stabilization options".into());
     }
     let manager = StabilizationManager::default();
     // Zooming uses a nominal video grid; image processing is requested by actual PTS.
@@ -65,21 +76,30 @@ fn create(config: Config) -> Result<Engine, String> {
     manager.set_render_params((config.width,config.height),(config.output_width,config.output_height));
     manager.set_smoothing_method(2); // Plain 3D, follows intentional camera turns.
     manager.set_adaptive_zoom(2.0);
-    manager.set_max_zoom(180.0, 5);
+    manager.set_max_zoom(0.0, 0); // Apply our explicit crop bound below, independent of output resolution.
     manager.set_frame_readout_time(0.0); // Unknown readout: no rolling-shutter correction.
     manager.set_background_color(nalgebra::Vector4::new(0.0,0.0,0.0,255.0));
     manager.set_horizon_lock(0.0, 0.0);
     manager.set_video_rotation(0.0); // Swift preserves the source track transform.
+    let requested_tau = 0.16 * 25.0f64.powf(config.options.strength);
+    let limit = 1.0 / config.options.max_crop;
     let mut acceptable = false;
-    for smoothing in [0.8, 0.4, 0.2, 0.1] {
-        manager.set_smoothing_param("time_constant", smoothing);
+    for factor in [1.0, 0.5, 0.25, 0.1, 0.02] {
+        manager.set_smoothing_param("time_constant", requested_tau * factor);
         manager.recompute_blocking();
-        let params = manager.params.read();
-        if !params.fovs.is_empty() && params.fovs.iter().all(|f| f.is_finite() && *f >= 1.0 / 2.2) {
+        let mut params = manager.params.write();
+        if params.fovs.is_empty() || params.fovs.iter().any(|f| !f.is_finite() || *f <= 0.0) {
+            return Err("Invalid crop calculation".into());
+        }
+        if config.options.allow_black_borders || params.fovs.iter().all(|f| *f >= limit) {
+            for fov in &mut params.fovs {
+                *fov = if config.options.dynamic_crop { fov.clamp(limit, 1.0) } else { limit };
+            }
             acceptable = true; break;
         }
     }
-    if !acceptable { return Err("Motion requires excessive crop; original retained".into()); }
+    if !acceptable { return Err("裁切上限不足：请增大最大裁切，或开启允许黑边。原片已保留。".into()); }
+    manager.recompute_undistortion();
     // First mobile integration uses the verified CPU buffer path. GPU upload/readback
     // produced black frames in the standalone harness and needs separate validation.
     manager.set_device(-1);
@@ -147,7 +167,7 @@ pub unsafe extern "C" fn mc_engine_destroy(engine: *mut Engine) {
 mod tests {
     use super::*;
     fn fixture() -> Config {
-        Config {width:640,height:360,output_width:640,output_height:360,duration_ms:1000.0,fps:30.0,
+        Config {options:Options::default(),width:640,height:360,output_width:640,output_height:360,duration_ms:1000.0,fps:30.0,
             frames:(0..30).map(|i|Frame {timestamp_us:i*33333,k:[500.,0.,320.,0.,510.,180.,0.,0.,1.]}).collect(),
             gyro:(-5..110).map(|i|Gyro{timestamp_ms:i as f64*10.,gyro:[0.,0.,0.]}).collect()}
     }
@@ -187,6 +207,56 @@ mod tests {
         let invalid = unsafe { mc_engine_process(&mut e,500000,input.as_mut_ptr(),4,2560,
             output.as_mut_ptr(),output.len(),2560,err.as_mut_ptr(),err.len()) };
         assert_eq!(invalid,-1);
+    }
+    #[test]
+    fn fixed_crop_and_black_border_limit_are_applied() {
+        let mut input = fixture();
+        input.options.max_crop = 5.0;
+        input.options.dynamic_crop = false;
+        input.options.allow_black_borders = true;
+        let engine = create(input).unwrap();
+        assert!(engine.manager.params.read().fovs.iter().all(|v| (*v-0.2).abs() < 1e-12));
+        let mut wide = fixture();
+        wide.options.max_crop = 1.0;
+        wide.options.allow_black_borders = true;
+        for sample in &mut wide.gyro { sample.gyro = [0., 0., (sample.timestamp_ms / 80.).sin()*3.]; }
+        let engine = create(wide).unwrap();
+        assert!(engine.manager.params.read().fovs.iter().all(|v| (*v-1.0).abs() < 1e-12));
+    }
+    #[test]
+    fn stronger_smoothing_changes_motion_when_black_borders_allowed() {
+        let mut weak = fixture();
+        weak.options.allow_black_borders = true;
+        weak.options.strength = 0.0;
+        for sample in &mut weak.gyro { sample.gyro = [0., 0., (sample.timestamp_ms/100.).sin()*2.]; }
+        let mut strong = fixture();
+        strong.options.allow_black_borders = true;
+        strong.options.strength = 1.0;
+        for sample in &mut strong.gyro { sample.gyro = [0., 0., (sample.timestamp_ms/100.).sin()*2.]; }
+        let a = create(weak).unwrap(); let b = create(strong).unwrap();
+        let ga = a.manager.gyro.read(); let gb = b.manager.gyro.read();
+        assert!(ga.smoothed_quaternions.iter().any(|(t, q)| q.angle_to(&gb.smoothed_quaternions[t]) > 0.01));
+    }
+    #[test]
+    fn crop_multiplier_matches_pixels_at_half_resolution() {
+        for (crop, expected) in [(1.0, 25i32), (5.0, 107i32)] {
+            let mut config = fixture();
+            config.output_width = 320; config.output_height = 180;
+            config.options.dynamic_crop = false; config.options.allow_black_borders = true;
+            config.options.max_crop = crop;
+            let mut e = create(config).unwrap();
+            let mut input = vec![0u8; 640*360*4];
+            for y in 0..360 { for x in 0..640 {
+                let index = (y*640+x)*4;
+                input[index+2] = (x*255/639) as u8; input[index+3] = 255;
+            }}
+            let mut output = vec![0u8; 320*180*4]; let mut error = vec![0i8;1024];
+            let status = unsafe { mc_engine_process(&mut e, 500000, input.as_mut_ptr(), input.len(),2560,
+                output.as_mut_ptr(), output.len(),1280,error.as_mut_ptr(),error.len()) };
+            assert_eq!(status, 0);
+            let pixel = output[(90*320+32)*4+2] as i32;
+            assert!((pixel-expected).abs() <= 2, "crop={crop}, pixel={pixel}, expected={expected}");
+        }
     }
     #[test]
     fn malformed_time_is_rejected() {

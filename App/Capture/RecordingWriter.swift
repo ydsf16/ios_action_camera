@@ -30,7 +30,7 @@ final class RecordingWriter {
     private var errorMessage: String?
     private var csvClosed = false
 
-    init(root: URL, device: AVCaptureDevice, connection: AVCaptureConnection) throws {
+    init(root: URL, device: AVCaptureDevice, connection: AVCaptureConnection, rotationDegrees: Int) throws {
         let date = Date()
         let format = DateFormatter()
         format.locale = Locale(identifier: "en_US_POSIX")
@@ -50,6 +50,7 @@ final class RecordingWriter {
             camera: device.deviceType.rawValue, width: Int(size.width), height: Int(size.height),
             stabilizationActive: connection.activeVideoStabilizationMode.rawValue,
             intrinsicsDeliveryEnabled: connection.isCameraIntrinsicMatrixDeliveryEnabled)
+        manifest.displayRotationDegrees = rotationDegrees
         manifest.maximumAutoExposureSeconds = device.activeMaxExposureDuration.seconds
         manifest.continuousAutoFocusEnabled = device.focusMode == .continuousAutoFocus
         manifest.systemTimestampSynchronizationEnabled = true
@@ -100,8 +101,8 @@ final class RecordingWriter {
                                       sourceFormatHint: CMSampleBufferGetFormatDescription(sample))
         video.expectsMediaDataInRealTime = true
         video.mediaTimeScale = 1_000_000
-        // Keep native buffers/intrinsics. Portrait display is a track transform only.
-        video.transform = CGAffineTransform(rotationAngle: .pi / 2)
+        // Keep native buffers/IMU/intrinsics; lock display orientation at recording start.
+        video.transform = CGAffineTransform(rotationAngle: Double(manifest.displayRotationDegrees) * .pi / 180)
         let audio = AVAssetWriterInput(mediaType: .audio, outputSettings: [
             AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 48_000,
             AVNumberOfChannelsKey: 1, AVEncoderBitRateKey: 128_000])

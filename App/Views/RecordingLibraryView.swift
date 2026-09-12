@@ -100,6 +100,10 @@ private struct ClipPreviewView: View {
     @State private var saving = false
     @State private var saved = false
     @State private var message: String?
+    @State private var showAdjustment = false
+    private var busy: Bool {
+        switch jobs.states[clip.id] { case .queued, .processing: return true; default: return false }
+    }
 
     private var stableURL: URL { clip.directory.appendingPathComponent(StabilizationProcessor.filename) }
     private var hasStable: Bool {
@@ -109,10 +113,10 @@ private struct ClipPreviewView: View {
     private var playbackURL: URL { hasStable && !showOriginal ? stableURL : clip.video }
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                if clip.canPlay { VideoPlayer(player: player) }
+            ScrollView { VStack(spacing: 16) {
+                if clip.canPlay { VideoPlayer(player: player).frame(minHeight: 220, idealHeight: 360) }
                 else { ContentUnavailableView("录制未完成", systemImage: "exclamationmark.triangle", description: Text("已有文件仍保存在本机，可通过“文件”App 导出检查。")) }
-                Text(hasStable ? (showOriginal ? "原片" : "稳定结果 · 标准") : "原片")
+                Text(hasStable ? (showOriginal ? "原片" : "稳定结果") : "原片")
                     .font(.footnote).foregroundStyle(.secondary).padding(.horizontal)
                 if hasStable {
                     Button(showOriginal ? "查看稳定结果" : "查看原片") {
@@ -121,7 +125,8 @@ private struct ClipPreviewView: View {
                         player = AVPlayer(url: playbackURL); player?.seek(to: time)
                         saved = false
                     }
-                } else {
+                }
+                Group {
                     switch jobs.states[clip.id] {
                     case .queued: Text("等待稳定处理").font(.footnote)
                     case let .processing(fraction):
@@ -131,9 +136,10 @@ private struct ClipPreviewView: View {
                         Text(error).font(.footnote).foregroundStyle(.orange).padding(.horizontal)
                         Button("重试稳定处理") { jobs.enqueue(clip.directory) }
                     default:
-                        Button("生成稳定视频") { jobs.enqueue(clip.directory) }.disabled(!clip.canPlay)
+                        if !hasStable { Button("生成稳定视频") { jobs.enqueue(clip.directory) }.disabled(!clip.canPlay) }
                     }
                 }
+                Button("调整稳定参数") { showAdjustment = true }.disabled(busy || saving || !clip.canPlay)
                 Button {
                     Task { await saveToPhotos() }
                 } label: {
@@ -142,12 +148,21 @@ private struct ClipPreviewView: View {
                         Text(saving ? "正在保存…" : (saved ? "已保存到相册" : "保存到相册"))
                     }.frame(maxWidth: .infinity).padding(.vertical, 10)
                 }
-                .buttonStyle(.borderedProminent).disabled(saving || saved || !clip.canPlay).padding(.horizontal)
+                .buttonStyle(.borderedProminent).disabled(saving || saved || busy || !clip.canPlay).padding(.horizontal)
                 .padding(.bottom)
+            }
             }
             .navigationTitle("预览").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
             .task { if clip.canPlay { player = AVPlayer(url: playbackURL) } }
+            .sheet(isPresented: $showAdjustment) {
+                NavigationStack { StabilizationSettingsView(directory: clip.directory)
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { showAdjustment = false } } }
+                }
+            }
+            .onChange(of: jobs.revisions[clip.id]) { _, _ in
+                if hasStable { player?.pause(); showOriginal = false; player = AVPlayer(url: stableURL); saved = false }
+            }
             .onChange(of: hasStable) { _, ready in
                 if ready { player?.pause(); showOriginal = false; player = AVPlayer(url: stableURL); saved = false }
             }
