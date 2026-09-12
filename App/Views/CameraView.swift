@@ -178,7 +178,7 @@ private struct RecordingSettingsView: View {
                     Text("包含 Gyroflow 1.6.3 · GPLv3").font(.footnote).foregroundStyle(.secondary)
                 }
                 Section {
-                    Text("0.2.0 · 稳定处理原型\n录制结束后自动生成稳定视频，原片始终保留。")
+                    Text("0.2.1 · 稳定处理原型\n录制结束后自动生成稳定视频，原片始终保留。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

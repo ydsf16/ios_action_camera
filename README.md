@@ -2,7 +2,7 @@
 
 首版交互：**拍摄 → 预览 → 保存**。后续调整只提供「自然／标准／更稳」和「保持水平」。见[已确认 UI](docs/design/README.md)。
 
-## 当前版本：0.2.0（拍后稳定原型）
+## 当前版本：0.2.1（拍后稳定原型）
 
 - SwiftUI 相机界面；后置超广角／广角，录制期间镜头固定。
 - 优先 4K / 30fps / SDR，镜头不支持时回退 1080p / 30fps；H.264 视频、AAC 声音。
@@ -43,7 +43,7 @@ xcodebuild -project MotionCam.xcodeproj -scheme MotionCam \
   -derivedDataPath build-device CODE_SIGNING_ALLOWED=NO
 ```
 
-首次构建需要联网获取 Gyroflow 子模块和锁定的 Rust 依赖。构建脚本检查上游提交并应用 `patches/gyroflow-full-intrinsics.patch`，因此子模块显示本地修改是预期状态；完整修改以该补丁随源码发布。新增 Swift 文件后运行 `python3 scripts/generate_project.py` 更新工程；生成文件一并提交。
+首次构建需要联网获取 Gyroflow 子模块和锁定的 Rust 依赖。构建脚本检查上游提交并应用 `patches/gyroflow-full-intrinsics.patch`，因此子模块显示本地修改是预期状态；完整修改以该补丁随源码发布。成品编译后运行 `python3 scripts/check_app_linkage.py <MotionCam.app路径>`，确保未误连开发机上的动态库。新增 Swift 文件后运行 `python3 scripts/generate_project.py` 更新工程；生成文件一并提交。
 
 ## 结构
 

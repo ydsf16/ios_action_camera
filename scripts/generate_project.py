@@ -41,15 +41,15 @@ for mode in ['Debug', 'Release']:
     appsettings = {'PRODUCT_NAME':'$(TARGET_NAME)', 'PRODUCT_BUNDLE_IDENTIFIER':'com.grape.MotionCam',
         'INFOPLIST_FILE':'App/Resources/Info.plist', 'GENERATE_INFOPLIST_FILE':'NO', 'TARGETED_DEVICE_FAMILY':'1',
         'SUPPORTED_PLATFORMS':'iphoneos iphonesimulator', 'SUPPORTS_MACCATALYST':'NO',
-        'SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD':'NO', 'MARKETING_VERSION':'0.2.0', 'CURRENT_PROJECT_VERSION':'2',
+        'SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD':'NO', 'MARKETING_VERSION':'0.2.1', 'CURRENT_PROJECT_VERSION':'3',
         'CODE_SIGN_STYLE':'Automatic', 'DEVELOPMENT_TEAM':'F2LVFHW3ZH',
         'LD_RUNPATH_SEARCH_PATHS':'$(inherited) @executable_path/Frameworks',
         'ARCHS':'arm64',
         'SWIFT_OBJC_BRIDGING_HEADER':'App/MotionCam-Bridging-Header.h',
         'HEADER_SEARCH_PATHS':'$(inherited) $(SRCROOT)/Engine/include',
-        'LIBRARY_SEARCH_PATHS[sdk=iphoneos*]':'$(inherited) $(SRCROOT)/Engine/target/aarch64-apple-ios/release',
-        'LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]':'$(inherited) $(SRCROOT)/Engine/target/aarch64-apple-ios-sim/release',
-        'OTHER_LDFLAGS':'$(inherited) -lmotioncam_gyroflow -lc++ -liconv -framework Metal -framework QuartzCore -framework Security -framework SystemConfiguration'}
+        'GYROFLOW_STATIC_LIBRARY[sdk=iphoneos*]':'$(SRCROOT)/Engine/target/aarch64-apple-ios/release/libmotioncam_gyroflow.a',
+        'GYROFLOW_STATIC_LIBRARY[sdk=iphonesimulator*]':'$(SRCROOT)/Engine/target/aarch64-apple-ios-sim/release/libmotioncam_gyroflow.a',
+        'OTHER_LDFLAGS':'$(inherited) "$(GYROFLOW_STATIC_LIBRARY)" -lc++ -liconv -framework Metal -framework QuartzCore -framework Security -framework SystemConfiguration'}
     for group, settings in [('project', common), ('app', appsettings)]:
         fields = ' '.join(f'{q(k)} = {q(v)};' for k,v in settings.items())
         obj(group+mode, f'isa = XCBuildConfiguration; buildSettings = {{ {fields} }}; name = {mode};')
