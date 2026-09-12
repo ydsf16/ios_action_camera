@@ -7,7 +7,7 @@ struct LicenseNoticesView: View {
                 Text(contents("THIRD_PARTY_NOTICES", extension: "md"))
                 Text(contents("LICENSE", extension: nil))
             }.font(.caption).textSelection(.enabled).padding()
-        }.navigationTitle("开源许可")
+        }.background(AppTheme.background).foregroundStyle(.primary).navigationTitle("开源许可")
     }
     private func contents(_ name: String, extension ext: String?) -> String {
         guard let url = Bundle.main.url(forResource: name, withExtension: ext),

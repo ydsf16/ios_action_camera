@@ -26,7 +26,7 @@ struct RecordingLibraryView: View {
                 .alert("素材提示", isPresented: Binding(get: { library.failure != nil && preview == nil }, set: { if !$0 { library.failure = nil } })) {
                     Button("知道了", role: .cancel) { library.failure = nil }
                 } message: { Text(library.failure ?? "") }
-        }.tint(.white)
+        }.tint(AppTheme.accent)
     }
 
     private var managedContent: some View {
@@ -45,6 +45,7 @@ struct RecordingLibraryView: View {
 
     private var navigationContent: some View {
         content
+            .background(AppTheme.background)
             .navigationTitle(selecting ? "选择素材" : "素材")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { libraryToolbar }
@@ -64,7 +65,7 @@ struct RecordingLibraryView: View {
             ContentUnavailableView {
                 Label("还没有视频", systemImage: "video")
             } description: { Text("拍摄的视频会保存在这里。") }
-            actions: { Button("去拍摄") { dismiss() }.buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black) }
+            actions: { Button("去拍摄") { dismiss() }.buttonStyle(PrimaryActionStyle()) }
         } else { grid }
     }
 

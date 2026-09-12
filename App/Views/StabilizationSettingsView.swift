@@ -3,6 +3,7 @@ import SwiftUI
 struct StabilizationSettingsView: View {
     let directory: URL?
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ObservedObject private var jobs = StabilizationJobs.shared
     @State private var options: StabilizationOptions
     @State private var error: String?
@@ -12,24 +13,51 @@ struct StabilizationSettingsView: View {
     }
     var body: some View {
         Form {
-            Section("导出") {
-                Picker("分辨率", selection: $options.exportResolution) {
-                    ForEach(ExportResolution.allCases) { resolution in
-                        Text(resolution.label).tag(resolution)
+            Section {
+                VStack(alignment: .leading, spacing: 16) {
+                    SettingsLabel("输出分辨率", symbol: "square.and.arrow.up", color: AppTheme.accent)
+                    let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))
+                    layout {
+                        ForEach(ExportResolution.allCases) { resolution in
+                            resolutionButton(resolution)
+                        }
                     }
                 }
-                Text("1080p：1920×1080；2.8K：2816×1584，横竖屏自动适配。保留原片帧率，输出不超过原片尺寸；1080p 原片选择 2.8K 时仍输出 1080p。")
+                .padding(.vertical, 4)
+            } header: { Text("导出") } footer: {
+                Text("保留原片帧率，横竖屏自动适配。输出不超过原片尺寸；1080p 原片选择 2.8K 时仍输出 1080p。")
                     .font(.footnote).foregroundStyle(.secondary)
-            }
-            Section("稳定强度") {
-                LabeledContent("强度", value: "\(Int(options.strength * 100))%")
-                Slider(value: $options.strength, in: 0...1, step: 0.05)
+            }.listRowBackground(AppTheme.surface)
+            Section {
+                VStack(spacing: 14) {
+                    HStack {
+                        SettingsLabel("强度", symbol: "waveform.path", color: AppTheme.blue)
+                        Spacer()
+                        Text("\(Int(options.strength * 100))%")
+                            .font(.title3.weight(.semibold).monospacedDigit()).foregroundStyle(AppTheme.blue)
+                    }
+                    Slider(value: $options.strength, in: 0...1, step: 0.05)
+                        .tint(AppTheme.blue).accessibilityLabel("稳定强度")
+                    HStack {
+                        Text("自然运镜")
+                        Spacer()
+                        Text("更强稳定")
+                    }.font(.caption).foregroundStyle(.secondary)
+                }.padding(.vertical, 4)
+            } header: { Text("稳定强度") } footer: {
                 Text("越强越能抑制抖动，也会减少自然运镜。")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-            Section("裁切与画面边缘") {
-                LabeledContent(options.dynamicCrop ? "最大裁切" : "固定裁切", value: String(format: "%.1f×", options.maxCrop))
-                Slider(value: $options.maxCrop, in: 1...5, step: 0.1)
+            }.listRowBackground(AppTheme.surface)
+            Section {
+                VStack(spacing: 14) {
+                    HStack {
+                        SettingsLabel(options.dynamicCrop ? "最大裁切" : "固定裁切", symbol: "crop", color: AppTheme.violet)
+                        Spacer()
+                        Text(String(format: "%.1f×", options.maxCrop))
+                            .font(.title3.weight(.semibold).monospacedDigit()).foregroundStyle(AppTheme.violet)
+                    }
+                    Slider(value: $options.maxCrop, in: 1...5, step: 0.1)
+                        .tint(AppTheme.violet).accessibilityLabel(options.dynamicCrop ? "最大裁切" : "固定裁切")
+                }.padding(.vertical, 4)
                 Toggle("动态裁切", isOn: $options.dynamicCrop)
                 Toggle("允许黑边", isOn: $options.allowBlackBorders)
                     .onChange(of: options.allowBlackBorders) { _, allowed in
@@ -40,24 +68,52 @@ struct StabilizationSettingsView: View {
                         options.dynamicCrop = false; options.maxCrop = 1
                     }
                 }
-                Text(options.dynamicCrop ? "按运动自动缩放，最多达到上述倍数；不是固定放大倍数。" : "使用上述固定裁切倍数，整段画面不动态缩放。")
-                    .font(.footnote).foregroundStyle(.secondary)
-                Text(options.allowBlackBorders ? "开启时默认使用 1× 固定裁切，保留稳定强度和视野，运动后露出的区域显示黑色。手动增加裁切或开启动态裁切会减少黑边。" : "裁切不足时会降低平滑强度；仍无法覆盖边缘时提示调整参数。")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
+            } header: { Text("裁切与画面边缘") } footer: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(options.dynamicCrop ? "按运动自动缩放，最多达到上述倍数。" : "使用上述固定裁切倍数，整段画面不动态缩放。")
+                    Text(options.allowBlackBorders ? "开启时默认使用 1× 固定裁切，保留稳定强度和视野，运动后露出的区域显示黑色。手动增加裁切或开启动态裁切会减少黑边。" : "裁切不足时会降低平滑强度；仍无法覆盖边缘时提示调整参数。")
+                }
+            }.listRowBackground(AppTheme.surface)
             Section {
-                Button(directory == nil ? "保存为默认设置" : "应用并重新生成") {
+                Button {
                     do {
                         if let directory { jobs.enqueue(directory, options: options, force: true) }
                         else { try options.saveDefaults() }
                         dismiss()
                     } catch { self.error = error.localizedDescription }
-                }
+                } label: {
+                    Label(directory == nil ? "保存为默认设置" : "应用并重新生成", systemImage: directory == nil ? "checkmark" : "arrow.clockwise")
+                        .frame(maxWidth: .infinity)
+                }.buttonStyle(PrimaryActionStyle())
+                    .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
                 if let error { Text(error).foregroundStyle(.orange) }
+            } footer: {
                 Text(directory == nil ? "用于之后新建的处理任务。" : "原片和上一版稳定结果保留，新版完成后替换稳定结果。")
-                    .font(.footnote).foregroundStyle(.secondary)
             }
         }
+        .settingsAppearance()
         .navigationTitle("稳定与导出").navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func resolutionButton(_ resolution: ExportResolution) -> some View {
+        let selected = options.exportResolution == resolution
+        return Button { options.exportResolution = resolution } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text(resolution == .fullHD ? "1080p" : "2.8K").font(.title3.weight(.semibold))
+                    Spacer(minLength: 4)
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(selected ? AppTheme.accent : Color.secondary)
+                }
+                Text(resolution == .fullHD ? "高清 · 1920 × 1080" : "2816 × 1584")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .foregroundStyle(selected ? AppTheme.accent : Color.primary)
+            .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            .background(selected ? AppTheme.accent.opacity(0.12) : AppTheme.background.opacity(0.45), in: RoundedRectangle(cornerRadius: 12))
+            .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(selected ? AppTheme.accent.opacity(0.7) : Color.white.opacity(0.1), lineWidth: 1) }
+        }.buttonStyle(.plain)
+            .accessibilityLabel(resolution.label)
+            .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 }

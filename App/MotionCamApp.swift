@@ -11,7 +11,7 @@ struct MotionCamApp: App {
                 #else
                 CameraView()
                 #endif
-            }.preferredColorScheme(.dark)
+            }.preferredColorScheme(.dark).tint(AppTheme.accent)
         }
     }
 }

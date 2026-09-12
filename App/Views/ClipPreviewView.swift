@@ -50,7 +50,7 @@ struct ClipPreviewView: View {
                 ProgressView("正在停止处理并删除…").padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
             }
         }
-        .foregroundStyle(.white).tint(.white)
+        .foregroundStyle(.white).tint(AppTheme.accent)
         .statusBarHidden()
         .interactiveDismissDisabled(saving || library.deleting)
         .task { if clip.canPlay { replacePlayer() } }
@@ -58,7 +58,7 @@ struct ClipPreviewView: View {
             NavigationStack {
                 StabilizationSettingsView(directory: clip.directory)
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { showAdjustment = false } } }
-            }
+            }.tint(AppTheme.accent)
         }
         .sheet(isPresented: $showInfo) { ClipInfoView(clip: clip) }
         .onChange(of: jobs.revisions[clip.id]) { _, _ in stableResultChanged() }
@@ -126,14 +126,14 @@ struct ClipPreviewView: View {
                 HStack(spacing: 12) {
                     Button { player?.pause(); showAdjustment = true } label: {
                         Label("调整", systemImage: "slider.horizontal.3").frame(minWidth: 64, minHeight: 32)
-                    }.buttonStyle(.bordered).disabled(busy || saving)
+                    }.buttonStyle(.bordered).tint(AppTheme.accent).disabled(busy || saving)
                     Button { Task { await saveToPhotos() } } label: {
                         HStack(spacing: 8) {
-                            if saving { ProgressView().tint(.black) }
+                            if saving { ProgressView().tint(AppTheme.accent) }
                             else { Image(systemName: saved ? "checkmark" : "square.and.arrow.up") }
                             Text(saving ? "正在导出…" : saved ? "已保存到相册" : hasStable && !showOriginal ? "导出稳定视频" : "导出原片")
                         }.font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 32)
-                    }.buttonStyle(.borderedProminent).foregroundStyle(.black).disabled(saving || saved || busy)
+                    }.buttonStyle(PrimaryActionStyle(color: saved ? AppTheme.success : AppTheme.accent, completed: saved)).disabled(saving || saved || busy)
                     .accessibilityIdentifier("exportVideo")
                 }
             }
@@ -219,14 +219,14 @@ private struct ClipInfoView: View {
                     LabeledContent("原片", value: "\(clip.manifest.width) × \(clip.manifest.height) · \(clip.manifest.requestedFPS) fps")
                     LabeledContent("稳定视频", value: output)
                     LabeledContent("本机占用", value: "约 \(MediaText.storage(bytes ?? clip.allocatedBytes))")
-                }
+                }.listRowBackground(AppTheme.surface)
                 Section {
                     Text("本机素材包含原片、稳定视频和运动数据。导出会将当前视频另存到系统相册。")
                         .font(.footnote).foregroundStyle(.secondary)
-                }
-            }.navigationTitle("素材信息").navigationBarTitleDisplayMode(.inline)
+                }.listRowBackground(AppTheme.surface)
+            }.settingsAppearance().navigationTitle("素材信息").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
-        }
+        }.tint(AppTheme.accent)
         .task {
             let directory = clip.directory
             bytes = await Task.detached { RecordingStorage.allocatedBytes(in: directory) }.value

@@ -217,15 +217,22 @@ private struct CameraPreview: UIViewRepresentable {
 
 private struct CaptureFormatControls: View {
     @ObservedObject var camera: CaptureService
+    var showIcons = false
     var body: some View {
         if camera.availableFormats.isEmpty {
             LabeledContent("录制格式", value: "准备中")
         } else {
-            Picker("分辨率", selection: Binding(get: { camera.selectedFormat.resolution }, set: camera.selectResolution)) {
+            Picker(selection: Binding(get: { camera.selectedFormat.resolution }, set: camera.selectResolution)) {
                 ForEach(camera.availableResolutions) { resolution in Text(resolution.label).tag(resolution) }
+            } label: {
+                if showIcons { SettingsLabel("分辨率", symbol: "video.fill", color: AppTheme.blue) }
+                else { Text("分辨率") }
             }
-            Picker("帧率", selection: Binding(get: { camera.selectedFormat.fps }, set: camera.selectFrameRate)) {
+            Picker(selection: Binding(get: { camera.selectedFormat.fps }, set: camera.selectFrameRate)) {
                 ForEach(camera.availableFrameRates, id: \.self) { fps in Text("\(fps) fps").tag(fps) }
+            } label: {
+                if showIcons { SettingsLabel("帧率", symbol: "speedometer", color: AppTheme.blue) }
+                else { Text("帧率") }
             }
         }
     }
@@ -237,42 +244,59 @@ private struct RecordingSettingsView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("录制") {
-                    CaptureFormatControls(camera: camera).disabled(camera.phase != .ready)
-                    LabeledContent("自动对焦", value: camera.focusLabel)
-                    Picker("曝光模式", selection: Binding(get: { camera.exposurePolicy }, set: camera.selectExposurePolicy)) {
+                Section {
+                    CaptureFormatControls(camera: camera, showIcons: true).disabled(camera.phase != .ready)
+                    LabeledContent {
+                        Text(camera.focusLabel).foregroundStyle(.secondary)
+                    } label: {
+                        SettingsLabel("自动对焦", symbol: "viewfinder", color: AppTheme.blue)
+                    }
+                    Picker(selection: Binding(get: { camera.exposurePolicy }, set: camera.selectExposurePolicy)) {
                         ForEach(CaptureExposurePolicy.allCases) { policy in Text(policy.title).tag(policy) }
+                    } label: {
+                        SettingsLabel("曝光模式", symbol: "sun.max.fill", color: AppTheme.amber)
                     }.disabled(camera.phase != .ready)
-                    Text(camera.exposurePolicy.explanation).font(.footnote).foregroundStyle(.secondary)
-                    Text("仅显示当前镜头支持的格式。录制期间格式和镜头固定；60 fps 会增加存储和处理量。")
+                } header: { Text("录制") } footer: {
+                    Text(camera.exposurePolicy.explanation)
+                }.listRowBackground(AppTheme.surface)
+                Section("稳定处理") {
+                    NavigationLink { StabilizationSettingsView() } label: {
+                        SettingsLabel("默认稳定与导出参数", symbol: "waveform.path")
+                    }
+                }.listRowBackground(AppTheme.surface)
+                Section("保存") {
+                    SettingsLabel("素材保存在本机", symbol: "internaldrive", color: AppTheme.blue)
+                    Text("素材页可批量删除，预览页可导出到相册。完整录制文件可在“文件 → 我的 iPhone → MotionCam → Recordings”中导出。")
                         .font(.footnote).foregroundStyle(.secondary)
+                }.listRowBackground(AppTheme.surface)
+                Section {
                     DisclosureGroup("采集信息") {
                         LabeledContent("声音", value: "开启")
                         LabeledContent("方向", value: "自动横竖屏")
                         LabeledContent("视频／IMU 时钟同步", value: "开启")
                         Text("自动曝光和 ISO 调节保留。使用系统时间戳对齐，不代表硬件触发同步。")
                             .font(.footnote).foregroundStyle(.secondary)
+                        Text("仅显示当前镜头支持的格式。录制期间格式和镜头固定；60 fps 会增加存储和处理量。")
+                            .font(.footnote).foregroundStyle(.secondary)
                     }
-                }
-                Section("稳定处理") {
-                    NavigationLink("默认稳定与导出参数") { StabilizationSettingsView() }
-                }
-                Section("保存") {
-                    Text("视频和运动数据保存在本机。素材页可批量删除，预览页可导出到相册。")
-                    Text("完整录制文件可在“文件 → 我的 iPhone → MotionCam → Recordings”中导出。")
-                }
+                }.listRowBackground(AppTheme.surface)
                 Section("开源") {
-                    Link("源代码", destination: URL(string: "https://github.com/ydsf16/ios_action_camera")!)
-                    NavigationLink("开源许可") { LicenseNoticesView() }
+                    Link(destination: URL(string: "https://github.com/ydsf16/ios_action_camera")!) {
+                        SettingsLabel("源代码", symbol: "chevron.left.forwardslash.chevron.right", color: AppTheme.violet)
+                    }
+                    NavigationLink { LicenseNoticesView() } label: {
+                        SettingsLabel("开源许可", symbol: "doc.text", color: AppTheme.violet)
+                    }
                     Text("包含 Gyroflow 1.6.3 · GPLv3").font(.footnote).foregroundStyle(.secondary)
-                }
+                }.listRowBackground(AppTheme.surface)
                 Section {
                     Text("版本 \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—") · \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—")\n录制结束后自动生成稳定视频，原片保留至手动删除素材。")
                         .font(.footnote).foregroundStyle(.secondary)
-                }
+                }.listRowBackground(AppTheme.surface)
             }
+            .settingsAppearance()
             .navigationTitle("设置").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
-        }
+        }.tint(AppTheme.accent)
     }
 }
