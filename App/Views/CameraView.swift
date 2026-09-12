@@ -51,8 +51,12 @@ struct CameraView: View {
                         CaptureFormatControls(camera: camera)
                     } label: {
                         Text(camera.formatLabel).font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 12).frame(minHeight: 44)
+                            .background(.black.opacity(0.35), in: Capsule())
                     }.disabled(camera.phase != .ready).accessibilityLabel("录制格式")
-                    Button { showSettings = true } label: { Image(systemName: "gearshape").frame(width: 44, height: 44) }
+                    Button { showSettings = true } label: {
+                        Image(systemName: "gearshape").frame(width: 44, height: 44).background(.black.opacity(0.35), in: Circle())
+                    }
                         .disabled(recording || camera.phase == .finishing).accessibilityLabel("设置")
                 }
                 .shadow(color: .black.opacity(0.5), radius: 3, y: 1)
@@ -76,9 +80,9 @@ struct CameraView: View {
                         .shadow(color: .black.opacity(0.5), radius: 3, y: 1)
                     HStack {
                         Button { showLibrary = true } label: {
-                            Image(systemName: camera.latestDirectory == nil ? "photo.on.rectangle" : "play.rectangle.fill")
+                            Image(systemName: "square.grid.2x2")
                                 .font(.title2).frame(width: 54, height: 54)
-                                .background(.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+                                .background(.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
                         }.accessibilityLabel("素材").disabled(recording || camera.phase == .finishing)
                         Spacer()
                         Button {
@@ -240,19 +244,21 @@ private struct RecordingSettingsView: View {
                         ForEach(CaptureExposurePolicy.allCases) { policy in Text(policy.title).tag(policy) }
                     }.disabled(camera.phase != .ready)
                     Text(camera.exposurePolicy.explanation).font(.footnote).foregroundStyle(.secondary)
-                    LabeledContent("视频／IMU 时钟同步", value: "开启")
-                    Text("自动曝光和 ISO 调节保留。使用系统时间戳对齐，不代表硬件触发同步。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                    LabeledContent("声音", value: "开启")
-                    LabeledContent("方向", value: "自动横竖屏")
                     Text("仅显示当前镜头支持的格式。录制期间格式和镜头固定；60 fps 会增加存储和处理量。")
                         .font(.footnote).foregroundStyle(.secondary)
+                    DisclosureGroup("采集信息") {
+                        LabeledContent("声音", value: "开启")
+                        LabeledContent("方向", value: "自动横竖屏")
+                        LabeledContent("视频／IMU 时钟同步", value: "开启")
+                        Text("自动曝光和 ISO 调节保留。使用系统时间戳对齐，不代表硬件触发同步。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
                 Section("稳定处理") {
                     NavigationLink("默认稳定与导出参数") { StabilizationSettingsView() }
                 }
                 Section("保存") {
-                    Text("视频和运动数据保存在本机，可从素材预览保存视频到相册。")
+                    Text("视频和运动数据保存在本机。素材页可批量删除，预览页可导出到相册。")
                     Text("完整录制文件可在“文件 → 我的 iPhone → MotionCam → Recordings”中导出。")
                 }
                 Section("开源") {
@@ -261,7 +267,7 @@ private struct RecordingSettingsView: View {
                     Text("包含 Gyroflow 1.6.3 · GPLv3").font(.footnote).foregroundStyle(.secondary)
                 }
                 Section {
-                    Text("版本 \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—") · \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—")\n录制结束后自动生成稳定视频，原片始终保留。")
+                    Text("版本 \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—") · \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—")\n录制结束后自动生成稳定视频，原片保留至手动删除素材。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

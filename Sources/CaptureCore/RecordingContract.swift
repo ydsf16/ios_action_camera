@@ -1,6 +1,6 @@
 import Foundation
 
-public struct MediaTime: Codable, Equatable {
+public struct MediaTime: Codable, Equatable, Sendable {
     public let value: Int64
     public let timescale: Int32
     public var seconds: Double { Double(value) / Double(timescale) }
@@ -30,7 +30,7 @@ public enum ContractError: Error {
     case invalidTime, nonMonotonicTime
 }
 
-public struct RecordingManifest: Codable {
+public struct RecordingManifest: Codable, Sendable {
     public var schemaVersion = 1
     public var id: String
     public var createdAt: Date
