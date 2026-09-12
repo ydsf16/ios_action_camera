@@ -3,6 +3,7 @@ import AVFoundation
 
 struct CameraView: View {
     @StateObject private var camera = CaptureService()
+    @ObservedObject private var jobs = StabilizationJobs.shared
     @Environment(\.scenePhase) private var scenePhase
     @State private var showLibrary = false
     @State private var showSettings = false
@@ -110,10 +111,20 @@ struct CameraView: View {
             await camera.prepare()
         }
         .onChange(of: scenePhase) { _, value in
-            if value == .active { camera.setActive(!showLibrary); Task { await camera.prepare() } }
-            else if value == .background { camera.setActive(false) }
+            if value == .active {
+                jobs.setForeground(true)
+                camera.setActive(!showLibrary && !showSettings)
+                if !showLibrary && !showSettings { Task { await camera.prepare() } }
+            }
+            else if value == .background { jobs.setForeground(false); camera.setActive(false) }
         }
-        .onChange(of: recording) { _, value in UIApplication.shared.isIdleTimerDisabled = value }
+        .onChange(of: recording) { _, value in
+            UIApplication.shared.isIdleTimerDisabled = value
+            jobs.setRecording(value)
+        }
+        .onChange(of: camera.latestDirectory) { _, directory in
+            if let directory { jobs.enqueue(directory) }
+        }
         .onChange(of: showLibrary) { _, value in camera.setActive(!value && scenePhase == .active) }
     }
 
@@ -161,8 +172,13 @@ private struct RecordingSettingsView: View {
                     Text("视频和运动数据保存在本机，可从素材预览保存视频到相册。")
                     Text("完整录制文件可在“文件 → 我的 iPhone → MotionCam → Recordings”中导出。")
                 }
+                Section("开源") {
+                    Link("源代码", destination: URL(string: "https://github.com/ydsf16/ios_action_camera")!)
+                    NavigationLink("开源许可") { LicenseNoticesView() }
+                    Text("包含 Gyroflow 1.6.3 · GPLv3").font(.footnote).foregroundStyle(.secondary)
+                }
                 Section {
-                    Text("0.1.0 · 录制原型\n当前保存原片，稳定处理将在下一步加入。")
+                    Text("0.2.0 · 稳定处理原型\n录制结束后自动生成稳定视频，原片始终保留。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

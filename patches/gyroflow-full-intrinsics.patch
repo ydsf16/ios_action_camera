@@ -1,0 +1,39 @@
+diff --git a/src/core/gyro_source/file_metadata.rs b/src/core/gyro_source/file_metadata.rs
+index bec9796..1674f95 100644
+--- a/src/core/gyro_source/file_metadata.rs
++++ b/src/core/gyro_source/file_metadata.rs
+@@ -12,6 +12,8 @@ use super::{ TimeIMU, TimeQuat, TimeVec, splines };
+ #[derive(Default, Clone, Debug, serde::Serialize, serde::Deserialize)]
+ #[serde(default)]
+ pub struct LensParams {
++    /// MotionCam: full row-major K in calibration pixel coordinates.
++    pub camera_matrix: Option<[f64; 9]>,
+     pub focal_length: Option<f32>, // millimeters
+     pub pixel_pitch: Option<(u32, u32)>, // nanometers
+     pub sensor_size_px: Option<(u32, u32)>, // pixels
+diff --git a/src/core/stabilization/frame_transform.rs b/src/core/stabilization/frame_transform.rs
+index 2d2c3ff..c8b4cd5 100644
+--- a/src/core/stabilization/frame_transform.rs
++++ b/src/core/stabilization/frame_transform.rs
+@@ -105,6 +105,7 @@ impl FrameTransform {
+                 }
+             }
+         }
++        let explicit_camera_matrix = file_metadata.lens_params.get_closest(&((timestamp_ms * 1000.0).round() as i64), 100000).and_then(|v| v.camera_matrix);
+         drop(file_metadata);
+         drop(gyro);
+ 
+@@ -125,6 +126,13 @@ impl FrameTransform {
+             camera_matrix[(0, 2)] *= lens_ratiox;
+             camera_matrix[(1, 2)] *= lens_ratioy;
+         }
++        if let Some(k) = explicit_camera_matrix {
++            camera_matrix = Matrix3::from_row_slice(&k);
++            for col in 0..3 {
++                camera_matrix[(0, col)] *= params.width as f64 / calib_width;
++                camera_matrix[(1, col)] *= params.height as f64 / calib_height;
++            }
++        }
+         if digital_zoom > 0.0 {
+             camera_matrix[(0, 0)] *= digital_zoom;
+             camera_matrix[(1, 1)] *= digital_zoom;

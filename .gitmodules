@@ -1,0 +1,3 @@
+[submodule "vendor/gyroflow"]
+	path = vendor/gyroflow
+	url = https://github.com/gyroflow/gyroflow.git

@@ -1,0 +1,196 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Thin C boundary around pinned Gyroflow. All frame and gyro times are video-relative.
+use gyroflow_core::{StabilizationManager, gyro_source::{FileMetadata, LensParams, TimeIMU},
+    gpu::{Buffers, BufferDescription, BufferSource}, stabilization::BGRA8};
+use serde::Deserialize;
+use std::{ffi::{c_char, CStr}, panic::{catch_unwind, AssertUnwindSafe}};
+
+#[derive(Deserialize)]
+struct Frame { timestamp_us: i64, k: [f64; 9] }
+#[derive(Deserialize)]
+struct Gyro { timestamp_ms: f64, gyro: [f64; 3] }
+#[derive(Deserialize)]
+struct Config {
+    width: usize, height: usize, output_width: usize, output_height: usize,
+    duration_ms: f64, fps: f64, frames: Vec<Frame>, gyro: Vec<Gyro>,
+}
+pub struct Engine { manager: StabilizationManager, width: usize, height: usize, ow: usize, oh: usize }
+
+fn create(config: Config) -> Result<Engine, String> {
+    if config.width < 4 || config.height < 4 || config.width > 4096 || config.height > 4096
+        || config.output_width < 4 || config.output_height < 4 || config.output_width > 1920 || config.output_height > 1920
+        || config.frames.len() < 2 || config.gyro.len() < 3 || !config.duration_ms.is_finite()
+        || config.duration_ms <= 0.0 || config.duration_ms > 3_600_000.0 || !(1.0..=120.0).contains(&config.fps) {
+        return Err("Invalid input dimensions, timing, or missing motion data".into());
+    }
+    if config.frames.windows(2).any(|w| w[1].timestamp_us <= w[0].timestamp_us)
+        || config.gyro.windows(2).any(|w| w[1].timestamp_ms <= w[0].timestamp_ms)
+        || config.frames.iter().any(|f| f.k.iter().any(|x| !x.is_finite()) || f.k[0] <= 0.0 || f.k[4] <= 0.0)
+        || config.gyro.iter().any(|g| !g.timestamp_ms.is_finite() || g.gyro.iter().any(|x| !x.is_finite())) {
+        return Err("Non-monotonic timestamps or invalid calibration values".into());
+    }
+    let manager = StabilizationManager::default();
+    // Zooming uses a nominal video grid; image processing is requested by actual PTS.
+    let frame_count = (config.duration_ms * config.fps / 1000.0).ceil() as usize;
+    manager.init_from_video_data(config.duration_ms, config.fps, frame_count, (config.width, config.height));
+    let k = config.frames[config.frames.len()/2].k;
+    let lens = serde_json::json!({
+        "name":"MotionCam recorded intrinsics (distortion uncalibrated)",
+        "calib_dimension":{"w":config.width,"h":config.height},
+        "orig_dimension":{"w":config.width,"h":config.height},
+        "calibrator_version":"MotionCam-recorded-intrinsics-v1","camera_brand":"Apple","fps":config.fps,"input_horizontal_stretch":1.0,"input_vertical_stretch":1.0,
+        "distortion_model":"opencv_standard",
+        "fisheye_params":{"camera_matrix":[[k[0],k[1],k[2]],[k[3],k[4],k[5]],[k[6],k[7],k[8]]],"distortion_coeffs":[0,0,0,0,0,0,0,0]}
+    });
+    manager.load_lens_profile(&lens.to_string()).map_err(|e| format!("Lens: {e:?}"))?;
+    let mut metadata = FileMetadata::default();
+    metadata.imu_orientation = Some("XYZ".into());
+    metadata.has_accurate_timestamps = true;
+    metadata.detected_source = Some("MotionCam".into());
+    // Gyroflow internal IMUData expects degrees/s. Convert here, not in the recording.
+    metadata.raw_imu = config.gyro.iter().map(|g| TimeIMU {
+        timestamp_ms: g.timestamp_ms,
+        gyro: Some(g.gyro.map(f64::to_degrees)), accl: None, magn: None,
+    }).collect();
+    for frame in &config.frames {
+        metadata.lens_params.insert(frame.timestamp_us, LensParams {camera_matrix: Some(frame.k), ..Default::default()});
+    }
+    {
+        let mut gyro = manager.gyro.write();
+        gyro.init_from_params(&manager.params.read());
+        gyro.integration_method = 3;
+        gyro.load_from_telemetry(metadata);
+        gyro.integrate();
+    }
+    manager.set_render_params((config.width,config.height),(config.output_width,config.output_height));
+    manager.set_smoothing_method(2); // Plain 3D, follows intentional camera turns.
+    manager.set_adaptive_zoom(2.0);
+    manager.set_max_zoom(180.0, 5);
+    manager.set_frame_readout_time(0.0); // Unknown readout: no rolling-shutter correction.
+    manager.set_background_color(nalgebra::Vector4::new(0.0,0.0,0.0,255.0));
+    manager.set_horizon_lock(0.0, 0.0);
+    manager.set_video_rotation(0.0); // Swift preserves the source track transform.
+    let mut acceptable = false;
+    for smoothing in [0.8, 0.4, 0.2, 0.1] {
+        manager.set_smoothing_param("time_constant", smoothing);
+        manager.recompute_blocking();
+        let params = manager.params.read();
+        if !params.fovs.is_empty() && params.fovs.iter().all(|f| f.is_finite() && *f >= 1.0 / 2.2) {
+            acceptable = true; break;
+        }
+    }
+    if !acceptable { return Err("Motion requires excessive crop; original retained".into()); }
+    // First mobile integration uses the verified CPU buffer path. GPU upload/readback
+    // produced black frames in the standalone harness and needs separate validation.
+    manager.set_device(-1);
+    Ok(Engine { manager, width: config.width, height: config.height, ow: config.output_width, oh: config.output_height })
+}
+
+unsafe fn error_out(message: &str, dst: *mut c_char, capacity: usize) {
+    if dst.is_null() || capacity == 0 { return; }
+    let bytes = message.as_bytes();
+    let n = bytes.len().min(capacity - 1);
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst.cast(), n);
+    *dst.add(n) = 0;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mc_engine_create(json: *const c_char, error: *mut c_char, capacity: usize) -> *mut Engine {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if json.is_null() { return Err("Null config".into()); }
+        let data = CStr::from_ptr(json).to_bytes();
+        let config: Config = serde_json::from_slice(data).map_err(|e| e.to_string())?;
+        create(config)
+    }));
+    match result {
+        Ok(Ok(engine)) => Box::into_raw(Box::new(engine)),
+        Ok(Err(message)) => { error_out(&message,error,capacity); std::ptr::null_mut() },
+        Err(_) => { error_out("Gyroflow initialization failed",error,capacity); std::ptr::null_mut() }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mc_engine_process(engine: *mut Engine, timestamp_us: i64,
+    input: *mut u8, input_len: usize, input_stride: usize,
+    output: *mut u8, output_len: usize, output_stride: usize,
+    error: *mut c_char, capacity: usize) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| -> Result<(),String> {
+        if engine.is_null() || input.is_null() || output.is_null() { return Err("Null frame buffer".into()); }
+        let e = &*engine;
+        if input_stride < e.width*4 || output_stride < e.ow*4
+            || input_stride.checked_mul(e.height).map_or(true, |n| n > input_len)
+            || output_stride.checked_mul(e.oh).map_or(true, |n| n > output_len) {
+            return Err("Invalid pixel buffer bounds".into());
+        }
+        let mut buffers = Buffers {
+            input: BufferDescription { size:(e.width,e.height,input_stride),
+                data:BufferSource::Cpu { buffer:std::slice::from_raw_parts_mut(input,input_len) }, ..Default::default() },
+            output: BufferDescription { size:(e.ow,e.oh,output_stride),
+                data:BufferSource::Cpu { buffer:std::slice::from_raw_parts_mut(output,output_len) }, ..Default::default() },
+        };
+        e.manager.process_pixels::<BGRA8>(timestamp_us,None,&mut buffers).map_err(|v|format!("Frame: {v:?}"))?;
+        Ok(())
+    }));
+    match result {
+        Ok(Ok(())) => 0,
+        Ok(Err(message)) => { error_out(&message,error,capacity); -1 },
+        Err(_) => { error_out("Gyroflow frame processing failed",error,capacity); -2 },
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mc_engine_destroy(engine: *mut Engine) {
+    if !engine.is_null() { drop(Box::from_raw(engine)); }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn fixture() -> Config {
+        Config {width:640,height:360,output_width:640,output_height:360,duration_ms:1000.0,fps:30.0,
+            frames:(0..30).map(|i|Frame {timestamp_us:i*33333,k:[500.,0.,320.,0.,510.,180.,0.,0.,1.]}).collect(),
+            gyro:(-5..110).map(|i|Gyro{timestamp_ms:i as f64*10.,gyro:[0.,0.,0.]}).collect()}
+    }
+    #[test]
+    fn stationary_motion_and_full_intrinsics() {
+        let engine = create(fixture()).unwrap();
+        let params = gyroflow_core::stabilization::ComputeParams::from_manager(&engine.manager);
+        let (k,_,_,_,_,_) = gyroflow_core::stabilization::FrameTransform::get_lens_data_at_timestamp(&params,500.,false);
+        assert_eq!(k[(0,0)],500.); assert_eq!(k[(1,1)],510.); assert_eq!(k[(0,2)],320.);
+        assert!(!engine.manager.gyro.read().quaternions.is_empty());
+        assert!(engine.manager.params.read().fovs.iter().all(|v|*v > 0.9));
+    }
+    #[test]
+    fn per_frame_intrinsics_follow_zoom() {
+        let mut input = fixture();
+        input.frames[15].k = [650.,0.,315.,0.,660.,185.,0.,0.,1.];
+        let engine = create(input).unwrap();
+        let params = gyroflow_core::stabilization::ComputeParams::from_manager(&engine.manager);
+        let (early,_,_,_,_,_) = gyroflow_core::stabilization::FrameTransform::get_lens_data_at_timestamp(&params,0.,false);
+        let (zoomed,_,_,_,_,_) = gyroflow_core::stabilization::FrameTransform::get_lens_data_at_timestamp(&params,499.995,false);
+        assert_eq!(early[(0,0)],500.); assert_eq!(early[(0,2)],320.);
+        assert_eq!(zoomed[(0,0)],650.); assert_eq!(zoomed[(1,1)],660.);
+        assert_eq!(zoomed[(0,2)],315.); assert_eq!(zoomed[(1,2)],185.);
+    }
+    #[test]
+    fn cpu_reprojection_produces_pixels() {
+        let mut e = create(fixture()).unwrap();
+        let mut input = vec![0u8;640*360*4];
+        for px in input.chunks_exact_mut(4) { px.copy_from_slice(&[20,80,160,255]); }
+        let mut output = vec![0u8;640*360*4];
+        let mut err = vec![0i8;1024];
+        let status = unsafe { mc_engine_process(&mut e, 500000, input.as_mut_ptr(),input.len(),2560,
+            output.as_mut_ptr(),output.len(),2560,err.as_mut_ptr(),err.len()) };
+        assert_eq!(status,0);
+        let center=(180*640+320)*4;
+        assert_eq!(&output[center..center+4], &[20,80,160,255]);
+        let invalid = unsafe { mc_engine_process(&mut e,500000,input.as_mut_ptr(),4,2560,
+            output.as_mut_ptr(),output.len(),2560,err.as_mut_ptr(),err.len()) };
+        assert_eq!(invalid,-1);
+    }
+    #[test]
+    fn malformed_time_is_rejected() {
+        let mut input=fixture(); input.gyro[2].timestamp_ms=input.gyro[1].timestamp_ms;
+        assert!(create(input).is_err());
+    }
+}

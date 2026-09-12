@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the small, dependency-free Xcode project using stable object IDs."""
+"""Generate the Xcode project; build the pinned Rust library with build_engine.sh first."""
 from pathlib import Path
 import hashlib
 import json
@@ -20,12 +20,17 @@ for file in files:
     ref = obj('file:'+path, f'isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {q(path)}; sourceTree = SOURCE_ROOT;')
     build = obj('build:'+path, f'isa = PBXBuildFile; fileRef = {ref};')
     refs.append(ref); builds.append(build)
+resources = []
+for path in ['LICENSE', 'THIRD_PARTY_NOTICES.md']:
+    ref = obj('file:'+path, f'isa = PBXFileReference; lastKnownFileType = text; path = {q(path)}; sourceTree = SOURCE_ROOT;')
+    refs.append(ref)
+    resources.append(obj('build:'+path, f'isa = PBXBuildFile; fileRef = {ref};'))
 app = obj('product', 'isa = PBXFileReference; explicitFileType = wrapper.application; path = MotionCam.app; sourceTree = BUILT_PRODUCTS_DIR;')
 obj('products', f'isa = PBXGroup; children = ({app},); name = Products; sourceTree = "<group>";')
 obj('group', f'isa = PBXGroup; children = ({",".join(refs + [uid("products")])},); sourceTree = "<group>";')
 obj('sources', f'isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = ({",".join(builds)},); runOnlyForDeploymentPostprocessing = 0;')
 obj('frameworks', 'isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;')
-obj('resources', 'isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;')
+obj('resources', f'isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ({",".join(resources)},); runOnlyForDeploymentPostprocessing = 0;')
 for mode in ['Debug', 'Release']:
     common = {'SDKROOT':'iphoneos', 'IPHONEOS_DEPLOYMENT_TARGET':'17.0', 'CLANG_ENABLE_MODULES':'YES',
               'SWIFT_VERSION':'5.0', 'SWIFT_STRICT_CONCURRENCY':'targeted', 'ENABLE_USER_SCRIPT_SANDBOXING':'YES'}
@@ -36,11 +41,17 @@ for mode in ['Debug', 'Release']:
     appsettings = {'PRODUCT_NAME':'$(TARGET_NAME)', 'PRODUCT_BUNDLE_IDENTIFIER':'com.grape.MotionCam',
         'INFOPLIST_FILE':'App/Resources/Info.plist', 'GENERATE_INFOPLIST_FILE':'NO', 'TARGETED_DEVICE_FAMILY':'1',
         'SUPPORTED_PLATFORMS':'iphoneos iphonesimulator', 'SUPPORTS_MACCATALYST':'NO',
-        'SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD':'NO', 'MARKETING_VERSION':'0.1.0', 'CURRENT_PROJECT_VERSION':'1',
+        'SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD':'NO', 'MARKETING_VERSION':'0.2.0', 'CURRENT_PROJECT_VERSION':'2',
         'CODE_SIGN_STYLE':'Automatic', 'DEVELOPMENT_TEAM':'F2LVFHW3ZH',
-        'LD_RUNPATH_SEARCH_PATHS':'$(inherited) @executable_path/Frameworks'}
+        'LD_RUNPATH_SEARCH_PATHS':'$(inherited) @executable_path/Frameworks',
+        'ARCHS':'arm64',
+        'SWIFT_OBJC_BRIDGING_HEADER':'App/MotionCam-Bridging-Header.h',
+        'HEADER_SEARCH_PATHS':'$(inherited) $(SRCROOT)/Engine/include',
+        'LIBRARY_SEARCH_PATHS[sdk=iphoneos*]':'$(inherited) $(SRCROOT)/Engine/target/aarch64-apple-ios/release',
+        'LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]':'$(inherited) $(SRCROOT)/Engine/target/aarch64-apple-ios-sim/release',
+        'OTHER_LDFLAGS':'$(inherited) -lmotioncam_gyroflow -lc++ -liconv -framework Metal -framework QuartzCore -framework Security -framework SystemConfiguration'}
     for group, settings in [('project', common), ('app', appsettings)]:
-        fields = ' '.join(f'{k} = {q(v)};' for k,v in settings.items())
+        fields = ' '.join(f'{q(k)} = {q(v)};' for k,v in settings.items())
         obj(group+mode, f'isa = XCBuildConfiguration; buildSettings = {{ {fields} }}; name = {mode};')
 for group in ['project','app']:
     obj(group+'configs', f'isa = XCConfigurationList; buildConfigurations = ({uid(group+"Debug")},{uid(group+"Release")},); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;')
