@@ -79,3 +79,28 @@ python3 scripts/make_export_fixture.py /tmp/MC_Synthetic_Export_Test
   tests pass. Device and simulator builds pass; static-link audit passes.
 - Simulator full-screen landscape playback and overlay layout inspected. Device
   unavailable during this validation; this build has not been installed on iPhone.
+
+### 0.3.1: Metal GPU reprojection (2026-09-12)
+
+- Fixed pinned upstream OpenCV-standard WGSL `k2.x` reference to `params.k2.x`.
+  Previously shader compilation failed but an uncaptured validation handler only
+  logged the failure, and the wrapper returned success with zero pixels.
+- Tracked `patches/gyroflow-metal-validation.patch` fixes that identifier, makes
+  uncaptured GPU validation fail into the Rust panic boundary, and propagates
+  unsuccessful GPU rendering/readback. The app requires an actual wgpu backend
+  for every frame; initialization fallback to CPU cannot masquerade as GPU success.
+- Metal is now the default. Host regression config can request `use_gpu:false`.
+  GPU rendering currently uploads BGRA and reads back for AVFoundation encoding.
+  Clock mapping, K, smoothing, crop and audio handling are unchanged.
+- Nine Rust tests (including physical Mac Metal vs CPU pixels) and six Swift tests
+  pass. Moving gradient frames differ by mean 0.395–0.427 / 255 across all channels;
+  warm 640x360 timings vary, so these are not an iPhone speedup benchmark.
+- Signed device build and static-link audit passed. Installed 0.3.1 build 7 on
+  YJJY iPhone 16. First debug export was cancelled by foreground transition;
+  second completed using Metal in 2.782 seconds for 81 frames / 2.7 seconds of
+  recorded 4K input, with 1920x1080 encoded output and preserved portrait transform.
+  Full output decodes, extracted frame inspected, all 127 audio packet hashes match.
+  Originals retained and previous CPU result backed up outside the repository.
+- Receipt now includes processing_seconds and Metal backend. GPU failure stops the
+  job and preserves prior output. Long recordings, thermal behavior and eliminating
+  transfer overhead remain future profiling work.

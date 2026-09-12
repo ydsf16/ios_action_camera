@@ -18,10 +18,12 @@ impl Default for Options {
 #[derive(Deserialize)]
 struct Config {
     #[serde(default)] options: Options,
+    #[serde(default = "default_gpu")] use_gpu: bool,
     width: usize, height: usize, output_width: usize, output_height: usize,
     duration_ms: f64, fps: f64, frames: Vec<Frame>, gyro: Vec<Gyro>,
 }
-pub struct Engine { manager: StabilizationManager, width: usize, height: usize, ow: usize, oh: usize }
+fn default_gpu() -> bool { true }
+pub struct Engine { use_gpu: bool, manager: StabilizationManager, width: usize, height: usize, ow: usize, oh: usize }
 
 fn create(config: Config) -> Result<Engine, String> {
     if config.width < 4 || config.height < 4 || config.width > 4096 || config.height > 4096
@@ -100,10 +102,8 @@ fn create(config: Config) -> Result<Engine, String> {
     }
     if !acceptable { return Err("裁切上限不足：请增大最大裁切，或开启允许黑边。原片已保留。".into()); }
     manager.recompute_undistortion();
-    // First mobile integration uses the verified CPU buffer path. GPU upload/readback
-    // produced black frames in the standalone harness and needs separate validation.
-    manager.set_device(-1);
-    Ok(Engine { manager, width: config.width, height: config.height, ow: config.output_width, oh: config.output_height })
+    manager.set_device(if config.use_gpu { 0 } else { -1 });
+    Ok(Engine { use_gpu: config.use_gpu, manager, width: config.width, height: config.height, ow: config.output_width, oh: config.output_height })
 }
 
 unsafe fn error_out(message: &str, dst: *mut c_char, capacity: usize) {
@@ -148,7 +148,10 @@ pub unsafe extern "C" fn mc_engine_process(engine: *mut Engine, timestamp_us: i6
             output: BufferDescription { size:(e.ow,e.oh,output_stride),
                 data:BufferSource::Cpu { buffer:std::slice::from_raw_parts_mut(output,output_len) }, ..Default::default() },
         };
-        e.manager.process_pixels::<BGRA8>(timestamp_us,None,&mut buffers).map_err(|v|format!("Frame: {v:?}"))?;
+        let processed = e.manager.process_pixels::<BGRA8>(timestamp_us,None,&mut buffers).map_err(|v|format!("Frame: {v:?}"))?;
+        if e.use_gpu && processed.backend != "wgpu" {
+            return Err("Metal GPU initialization failed; original video preserved".into());
+        }
         Ok(())
     }));
     match result {
@@ -167,7 +170,7 @@ pub unsafe extern "C" fn mc_engine_destroy(engine: *mut Engine) {
 mod tests {
     use super::*;
     fn fixture() -> Config {
-        Config {options:Options::default(),width:640,height:360,output_width:640,output_height:360,duration_ms:1000.0,fps:30.0,
+        Config {use_gpu:false,options:Options::default(),width:640,height:360,output_width:640,output_height:360,duration_ms:1000.0,fps:30.0,
             frames:(0..30).map(|i|Frame {timestamp_us:i*33333,k:[500.,0.,320.,0.,510.,180.,0.,0.,1.]}).collect(),
             gyro:(-5..110).map(|i|Gyro{timestamp_ms:i as f64*10.,gyro:[0.,0.,0.]}).collect()}
     }
@@ -191,6 +194,42 @@ mod tests {
         assert_eq!(early[(0,0)],500.); assert_eq!(early[(0,2)],320.);
         assert_eq!(zoomed[(0,0)],650.); assert_eq!(zoomed[(1,1)],660.);
         assert_eq!(zoomed[(0,2)],315.); assert_eq!(zoomed[(1,2)],185.);
+    }
+    #[test]
+    #[ignore = "requires a physical Metal GPU"]
+    fn metal_reprojection_matches_cpu() {
+        let mut cpu_config = fixture();
+        cpu_config.options.allow_black_borders = true;
+        cpu_config.options.max_crop = 1.;
+        for sample in &mut cpu_config.gyro { sample.gyro = [0., 0., (sample.timestamp_ms / 100.).sin() * 2.]; }
+        let mut gpu_config = fixture();
+        gpu_config.options = cpu_config.options.clone();
+        for (gpu, cpu) in gpu_config.gyro.iter_mut().zip(&cpu_config.gyro) { gpu.gyro = cpu.gyro; }
+        gpu_config.use_gpu = true;
+        let mut cpu = create(cpu_config).unwrap();
+        let mut gpu = create(gpu_config).unwrap();
+        let mut input = vec![0u8;640*360*4];
+        for y in 0..360 { for x in 0..640 {
+            let p = (y*640+x)*4;
+            input[p..p+4].copy_from_slice(&[(x*200/640+20) as u8, (y*200/360+20) as u8, 160, 255]);
+        }}
+        for timestamp in [0, 200000, 500000, 800000] {
+            let mut outputs = Vec::new();
+            for engine in [&mut cpu, &mut gpu] {
+                let start = std::time::Instant::now();
+                let mut output = vec![0u8;640*360*4];
+                let mut err = vec![0i8;1024];
+                let status = unsafe { mc_engine_process(engine, timestamp, input.as_mut_ptr(),input.len(),2560,
+                    output.as_mut_ptr(),output.len(),2560,err.as_mut_ptr(),err.len()) };
+                assert_eq!(status,0, "{}", unsafe { CStr::from_ptr(err.as_ptr()) }.to_string_lossy());
+                println!("gpu={} elapsed={:?}", engine.use_gpu, start.elapsed());
+                assert!(output.iter().filter(|v| **v > 10).count() > output.len()/2);
+                outputs.push(output);
+            }
+            let mae = outputs[0].iter().zip(&outputs[1]).map(|(a,b)| (*a as f64 - *b as f64).abs()).sum::<f64>() / outputs[0].len() as f64;
+            println!("timestamp={timestamp} CPU/GPU mean pixel difference={mae}");
+            assert!(mae < 3.0);
+        }
     }
     #[test]
     fn cpu_reprojection_produces_pixels() {

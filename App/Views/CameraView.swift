@@ -126,7 +126,7 @@ struct CameraView: View {
                 let name = args[index + 1]
                 if name.hasPrefix("MC_"), !name.contains("/"), !name.contains("..") {
                     showLibrary = true
-                    jobs.enqueue(CaptureService.recordingsRoot.appendingPathComponent(name))
+                    jobs.enqueue(CaptureService.recordingsRoot.appendingPathComponent(name), force: args.contains("--force-stabilization"))
                     return
                 }
             }

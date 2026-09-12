@@ -1,0 +1,48 @@
+diff --git a/src/core/gpu/wgpu.rs b/src/core/gpu/wgpu.rs
+index 5c0cec6..5a8dcff 100644
+--- a/src/core/gpu/wgpu.rs
++++ b/src/core/gpu/wgpu.rs
+@@ -244,7 +244,7 @@ impl WgpuWrapper {
+             };
+ 
+             device.on_uncaptured_error(Box::new(|e| {
+-                log::error!("Uncaptured device error: {e:?}");
++                panic!("GPU validation failed: {e}");
+             }));
+ 
+             let mut kernel = include_str!("wgpu_undistort.wgsl").to_string();
+diff --git a/src/core/stabilization/distortion_models/opencv_standard.wgsl b/src/core/stabilization/distortion_models/opencv_standard.wgsl
+index 6e4c0ca..43495c4 100644
+--- a/src/core/stabilization/distortion_models/opencv_standard.wgsl
++++ b/src/core/stabilization/distortion_models/opencv_standard.wgsl
+@@ -9,7 +9,7 @@ fn undistort_point(pos_param: vec2<f32>) -> vec2<f32> {
+     // compensate distortion iteratively
+     for (var i: i32 = 0; i < 20; i = i + 1) {
+         let r2 = pos.x * pos.x + pos.y * pos.y;
+-        let icdist = (1.0 + ((params.k2.w * r2 + params.k2.z) * r2 + params.k2.y) * r2)/(1.0 + ((k2.x * r2 + params.k1.y) * r2 + params.k1.x) * r2);
++        let icdist = (1.0 + ((params.k2.w * r2 + params.k2.z) * r2 + params.k2.y) * r2)/(1.0 + ((params.k2.x * r2 + params.k1.y) * r2 + params.k1.x) * r2);
+         if (icdist < 0.0) {
+             return vec2<f32>(0.0, 0.0);
+         }
+diff --git a/src/core/stabilization/mod.rs b/src/core/stabilization/mod.rs
+index 4bea3f5..9d36c5c 100644
+--- a/src/core/stabilization/mod.rs
++++ b/src/core/stabilization/mod.rs
+@@ -665,7 +665,7 @@ impl Stabilization {
+                         return CACHED_WGPU.with(|x| {
+                             let mut cached = x.0.borrow_mut();
+                             if let Some(wgpu) = cached.get(&hash) {
+-                                wgpu.undistort_image(buffers, &itm, drawing_buffer);
++                                if !wgpu.undistort_image(buffers, &itm, drawing_buffer) { return Err(GyroflowCoreError::InvalidData); }
+                                 ret.backend = "wgpu";
+                                 Ok(ret)
+                             } else {
+@@ -677,7 +677,7 @@ impl Stabilization {
+                     }
+                 } else {
+                     if let Some(ref wgpu) = self.wgpu {
+-                        wgpu.undistort_image(buffers, &itm, drawing_buffer);
++                        if !wgpu.undistort_image(buffers, &itm, drawing_buffer) { return Err(GyroflowCoreError::InvalidData); }
+                         ret.backend = "wgpu";
+                         return Ok(ret);
+                     } else {
