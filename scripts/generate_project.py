@@ -13,11 +13,12 @@ objects = []
 def obj(name, content):
     objects.append(f'{uid(name)} = {{ {content} }};')
     return uid(name)
-files = sorted(list(root.glob('App/**/*.swift')) + list(root.glob('Sources/CaptureCore/*.swift')))
+files = sorted(list(root.glob('App/**/*.swift')) + list(root.glob('App/**/*.metal')) + list(root.glob('Sources/CaptureCore/*.swift')))
 refs, builds = [], []
 for file in files:
     path = str(file.relative_to(root))
-    ref = obj('file:'+path, f'isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = {q(path)}; sourceTree = SOURCE_ROOT;')
+    kind = 'sourcecode.metal' if file.suffix == '.metal' else 'sourcecode.swift'
+    ref = obj('file:'+path, f'isa = PBXFileReference; lastKnownFileType = {kind}; path = {q(path)}; sourceTree = SOURCE_ROOT;')
     build = obj('build:'+path, f'isa = PBXBuildFile; fileRef = {ref};')
     refs.append(ref); builds.append(build)
 resources = []
@@ -41,7 +42,7 @@ for mode in ['Debug', 'Release']:
     appsettings = {'PRODUCT_NAME':'$(TARGET_NAME)', 'PRODUCT_BUNDLE_IDENTIFIER':'com.grape.MotionCam',
         'INFOPLIST_FILE':'App/Resources/Info.plist', 'GENERATE_INFOPLIST_FILE':'NO', 'TARGETED_DEVICE_FAMILY':'1',
         'SUPPORTED_PLATFORMS':'iphoneos iphonesimulator', 'SUPPORTS_MACCATALYST':'NO',
-        'SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD':'NO', 'MARKETING_VERSION':'0.3.1', 'CURRENT_PROJECT_VERSION':'7',
+        'SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD':'NO', 'MARKETING_VERSION':'0.4.0', 'CURRENT_PROJECT_VERSION':'8',
         'CODE_SIGN_STYLE':'Automatic', 'DEVELOPMENT_TEAM':'F2LVFHW3ZH',
         'LD_RUNPATH_SEARCH_PATHS':'$(inherited) @executable_path/Frameworks',
         'ARCHS':'arm64',
@@ -70,4 +71,4 @@ ref = f'<BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="{
 <ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" savedToolIdentifier="" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES"><BuildableProductRunnable runnableDebuggingMode="0">{ref}</BuildableProductRunnable></ProfileAction>
 <AnalyzeAction buildConfiguration="Debug"/><ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES"/>
 </Scheme>''')
-print(f'Generated {project.name}: {len(files)} Swift files')
+print(f'Generated {project.name}: {len(files)} source files')

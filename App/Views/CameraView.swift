@@ -143,7 +143,6 @@ struct CameraView: View {
             else if value == .background { jobs.setForeground(false); camera.setActive(false) }
         }
         .onChange(of: recording) { _, value in
-            UIApplication.shared.isIdleTimerDisabled = value
             jobs.setRecording(value)
         }
         .onChange(of: camera.latestDirectory) { _, directory in

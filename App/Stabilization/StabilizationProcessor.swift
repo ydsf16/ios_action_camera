@@ -23,6 +23,13 @@ enum StabilizationProcessor {
     static let filename = "stabilized.mov"
     static func process(directory: URL, options: StabilizationOptions, control: ProcessingControl, progress: @escaping (Double) -> Void) async throws -> URL {
         let processingStarted = Date()
+        var timings: [String: Double] = [:]
+        var stageStarted = CFAbsoluteTimeGetCurrent()
+        func measured(_ name: String) { let now = CFAbsoluteTimeGetCurrent(); timings[name, default: 0] += now-stageStarted; stageStarted = now }
+        var legacy = false
+        #if DEBUG
+        legacy = ProcessInfo.processInfo.arguments.contains("--legacy-bgra")
+        #endif
         func mark(_ stage: String) {
             let state = ["stage": stage, "updated_at": ISO8601DateFormatter().string(from: Date())]
             if let data = try? JSONSerialization.data(withJSONObject: state, options: [.sortedKeys]) {
@@ -33,12 +40,17 @@ enum StabilizationProcessor {
         let config = try StabilizationInput.load(directory: directory, options: options)
         let json = String(decoding: try JSONEncoder().encode(config), as: UTF8.self)
         var errorBuffer = [CChar](repeating: 0, count: 2048)
+        measured("input_parse_seconds")
         mark("waiting-for-capture")
         try control.checkpoint()
         mark("initializing-core")
         guard let engine = json.withCString({ mc_engine_create($0, &errorBuffer, errorBuffer.count) }) else {
             throw InputError("稳定引擎初始化失败：\(String(cString: errorBuffer))")
         }
+        measured("pose_smoothing_crop_seconds")
+        let renderer = try legacy ? nil : MetalStabilizer()
+        let pixelFormat = legacy ? kCVPixelFormatType_32BGRA : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        measured("metal_setup_seconds")
         mark("loading-video-track")
         defer { mc_engine_destroy(engine) }
         let original = directory.appendingPathComponent("video.mov")
@@ -49,7 +61,8 @@ enum StabilizationProcessor {
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else { throw InputError("找不到视频轨道。") }
         let reader = try AVAssetReader(asset: asset)
         let videoReader = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+            kCVPixelBufferPixelFormatTypeKey as String: pixelFormat,
+            kCVPixelBufferMetalCompatibilityKey as String: true, kCVPixelBufferIOSurfacePropertiesKey as String: [:]])
         videoReader.alwaysCopiesSampleData = false
         guard reader.canAdd(videoReader) else { throw InputError("无法解码视频。") }
         reader.add(videoReader)
@@ -70,7 +83,8 @@ enum StabilizationProcessor {
         guard writer.canAdd(videoWriter) else { throw InputError("无法创建视频编码器。") }
         writer.add(videoWriter)
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: videoWriter, sourcePixelBufferAttributes: [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferPixelFormatTypeKey as String: pixelFormat,
+            kCVPixelBufferMetalCompatibilityKey as String: true,
             kCVPixelBufferWidthKey as String: config.output_width, kCVPixelBufferHeightKey as String: config.output_height,
             kCVPixelBufferIOSurfacePropertiesKey as String: [:]])
         var audioWriter: AVAssetWriterInput?
@@ -96,8 +110,8 @@ enum StabilizationProcessor {
             while !input.isReadyForMoreMediaData {
                 try control.checkpoint()
                 guard writer.status == .writing else { throw writer.error ?? InputError("编码停止。") }
-                guard waited < 10_000 else { throw InputError("编码器等待超时，请重试。") }
-                Thread.sleep(forTimeInterval: 0.003)
+                guard waited < 60_000 else { throw InputError("编码器等待超时，请重试。") }
+                Thread.sleep(forTimeInterval: 0.0005)
                 waited += 1
             }
         }
@@ -115,12 +129,36 @@ enum StabilizationProcessor {
                 guard reader.status != .failed else { throw reader.error ?? InputError("声音读取失败。") }
             }
         }
+        measured("codec_setup_seconds")
+        struct Pending {
+            let frame: MetalStabilizer.Frame
+            let pts: CMTime
+        }
+        var pending: [Pending] = []
+        var rendered = 0
+        func drain() throws {
+            let next = pending.removeFirst()
+            let start = CFAbsoluteTimeGetCurrent()
+            timings["gpu_command_intervals_seconds", default: 0] += try next.frame.finish()
+            timings["gpu_wait_seconds", default: 0] += CFAbsoluteTimeGetCurrent()-start
+            let encodeStart = CFAbsoluteTimeGetCurrent()
+            try waitForInput(videoWriter)
+            guard adaptor.append(next.frame.output, withPresentationTime: next.pts) else { throw writer.error ?? InputError("输出帧写入失败。") }
+            timings["encode_wait_append_seconds", default: 0] += CFAbsoluteTimeGetCurrent()-encodeStart
+            rendered += 1
+            if rendered % 15 == 0 { progress(Double(rendered)/Double(config.frames.count)*0.95) }
+        }
         var count = 0
         var endTime = CMTime.zero
         mark("reading-first-video")
-        while let sample = videoReader.copyNextSampleBuffer() {
-            if count % 15 == 0 { mark("processing-frame-\(count)") }
+        while true {
             try control.checkpoint()
+            // Bounded to three frames: overlap decode / Metal / encode without growing memory.
+            if pending.count >= 3 { try drain() }
+            let decodeStart = CFAbsoluteTimeGetCurrent()
+            guard let sample = videoReader.copyNextSampleBuffer() else { break }
+            timings["decode_seconds", default: 0] += CFAbsoluteTimeGetCurrent()-decodeStart
+            if count % 60 == 0 { mark("processing-frame-\(count)") }
             try autoreleasepool {
                 let pts = CMSampleBufferGetPresentationTimeStamp(sample)
                 let timestamp = Int64((pts.seconds * 1e6).rounded())
@@ -129,27 +167,47 @@ enum StabilizationProcessor {
                 }
                 guard let source = CMSampleBufferGetImageBuffer(sample), CVPixelBufferGetWidth(source) == config.width,
                       CVPixelBufferGetHeight(source) == config.height else { throw InputError("解码尺寸与内参不匹配。") }
+                let allocationStart = CFAbsoluteTimeGetCurrent()
                 var result: CVPixelBuffer?
                 guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &result) == kCVReturnSuccess, let result else {
                     throw InputError("内存不足，无法分配输出帧。")
                 }
-                CVPixelBufferLockBaseAddress(source, [])
-                CVPixelBufferLockBaseAddress(result, [])
-                defer { CVPixelBufferUnlockBaseAddress(source, []); CVPixelBufferUnlockBaseAddress(result, []) }
-                guard let src = CVPixelBufferGetBaseAddress(source), let dst = CVPixelBufferGetBaseAddress(result) else { throw InputError("视频缓存不可用。") }
-                let code = mc_engine_process(engine, timestamp,
-                    src.assumingMemoryBound(to: UInt8.self), CVPixelBufferGetDataSize(source), CVPixelBufferGetBytesPerRow(source),
-                    dst.assumingMemoryBound(to: UInt8.self), CVPixelBufferGetDataSize(result), CVPixelBufferGetBytesPerRow(result),
-                    &errorBuffer, errorBuffer.count)
-                guard code == 0 else { throw InputError("稳定处理失败：\(String(cString: errorBuffer))") }
-                try waitForInput(videoWriter)
-                guard adaptor.append(result, withPresentationTime: pts) else { throw writer.error ?? InputError("输出帧写入失败。") }
+                timings["pool_seconds", default: 0] += CFAbsoluteTimeGetCurrent()-allocationStart
+                if let renderer {
+                    let transformStart = CFAbsoluteTimeGetCurrent()
+                    var rows = [Float](repeating: 0, count: 12)
+                    guard mc_engine_transform(engine, timestamp, &rows, rows.count) == 0 else { throw InputError("素材不支持当前 Metal 投影模型。") }
+                    timings["frame_transform_seconds", default: 0] += CFAbsoluteTimeGetCurrent()-transformStart
+                    let submitStart = CFAbsoluteTimeGetCurrent()
+                    let frame = try renderer.submit(source: source, output: result, rows: rows)
+                    pending.append(Pending(frame: frame, pts: pts))
+                    timings["gpu_submit_seconds", default: 0] += CFAbsoluteTimeGetCurrent()-submitStart
+                } else {
+                    // Retained solely for controlled performance/correctness comparisons.
+                    let start = CFAbsoluteTimeGetCurrent()
+                    CVPixelBufferLockBaseAddress(source, .readOnly); CVPixelBufferLockBaseAddress(result, [])
+                    defer { CVPixelBufferUnlockBaseAddress(source, .readOnly); CVPixelBufferUnlockBaseAddress(result, []) }
+                    guard let src = CVPixelBufferGetBaseAddress(source), let dst = CVPixelBufferGetBaseAddress(result) else { throw InputError("视频缓存不可用。") }
+                    let code = mc_engine_process(engine, timestamp,
+                        src.assumingMemoryBound(to: UInt8.self), CVPixelBufferGetDataSize(source), CVPixelBufferGetBytesPerRow(source),
+                        dst.assumingMemoryBound(to: UInt8.self), CVPixelBufferGetDataSize(result), CVPixelBufferGetBytesPerRow(result),
+                        &errorBuffer, errorBuffer.count)
+                    guard code == 0 else { throw InputError("稳定处理失败：\(String(cString: errorBuffer))") }
+                    timings["legacy_gpu_roundtrip_seconds", default: 0] += CFAbsoluteTimeGetCurrent()-start
+                    let encodeStart = CFAbsoluteTimeGetCurrent()
+                    try waitForInput(videoWriter)
+                    guard adaptor.append(result, withPresentationTime: pts) else { throw writer.error ?? InputError("输出帧写入失败。") }
+                    timings["encode_wait_append_seconds", default: 0] += CFAbsoluteTimeGetCurrent()-encodeStart
+                    rendered += 1
+                    if rendered % 15 == 0 { progress(Double(rendered)/Double(config.frames.count)*0.95) }
+                }
                 let duration = CMSampleBufferGetDuration(sample)
                 endTime = CMTimeAdd(pts, duration.isNumeric && duration.seconds > 0 ? duration : CMTime(value: 1,timescale: 30))
                 count += 1
-                progress(Double(count) / Double(config.frames.count) * 0.95)
             }
         }
+        while !pending.isEmpty { try control.checkpoint(); try drain() }
+        stageStarted = CFAbsoluteTimeGetCurrent()
         guard reader.status != .failed, count == config.frames.count else { throw reader.error ?? InputError("解码帧数不完整。") }
         videoWriter.markAsFinished()
         mark("waiting-for-audio")
@@ -159,7 +217,8 @@ enum StabilizationProcessor {
         await writer.finishWriting()
         try control.checkpoint()
         guard writer.status == .completed else { throw writer.error ?? InputError("稳定视频封装失败。") }
-        let receipt: [String:Any] = ["engine":"Gyroflow 1.6.3", "backend":"Metal (wgpu)", "processing_seconds":Date().timeIntervalSince(processingStarted), "options": try JSONSerialization.jsonObject(with: JSONEncoder().encode(options)), "input_frames":count,"output_width":config.output_width,
+        measured("finish_audio_container_seconds")
+        let receipt: [String:Any] = ["engine":"Gyroflow 1.6.3", "backend":legacy ? "Metal (wgpu BGRA benchmark)" : "Metal NV12 IOSurface", "timings":timings, "max_inflight_frames":legacy ? 1 : 3, "app_cpu_pixel_copies_per_frame":legacy ? 2 : 0, "interpolation":"Lanczos4", "processing_seconds":Date().timeIntervalSince(processingStarted), "options": try JSONSerialization.jsonObject(with: JSONEncoder().encode(options)), "input_frames":count,"output_width":config.output_width,
             "output_height":config.output_height,"rolling_shutter":false,"horizon_lock":false,
             "lens_model":"recorded per-frame K; uncalibrated zero residual distortion", "created_at":ISO8601DateFormatter().string(from:Date())]
         try JSONSerialization.data(withJSONObject:receipt,options:[.prettyPrinted,.sortedKeys])

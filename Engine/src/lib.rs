@@ -23,7 +23,7 @@ struct Config {
     duration_ms: f64, fps: f64, frames: Vec<Frame>, gyro: Vec<Gyro>,
 }
 fn default_gpu() -> bool { true }
-pub struct Engine { use_gpu: bool, manager: StabilizationManager, width: usize, height: usize, ow: usize, oh: usize }
+pub struct Engine { transforms: gyroflow_core::stabilization::ComputeParams, use_gpu: bool, manager: StabilizationManager, width: usize, height: usize, ow: usize, oh: usize }
 
 fn create(config: Config) -> Result<Engine, String> {
     if config.width < 4 || config.height < 4 || config.width > 4096 || config.height > 4096
@@ -103,7 +103,8 @@ fn create(config: Config) -> Result<Engine, String> {
     if !acceptable { return Err("裁切上限不足：请增大最大裁切，或开启允许黑边。原片已保留。".into()); }
     manager.recompute_undistortion();
     manager.set_device(if config.use_gpu { 0 } else { -1 });
-    Ok(Engine { use_gpu: config.use_gpu, manager, width: config.width, height: config.height, ow: config.output_width, oh: config.output_height })
+    let transforms = gyroflow_core::stabilization::ComputeParams::from_manager(&manager);
+    Ok(Engine { transforms, use_gpu: config.use_gpu, manager, width: config.width, height: config.height, ow: config.output_width, oh: config.output_height })
 }
 
 unsafe fn error_out(message: &str, dst: *mut c_char, capacity: usize) {
@@ -159,6 +160,42 @@ pub unsafe extern "C" fn mc_engine_process(engine: *mut Engine, timestamp_us: i6
         Ok(Err(message)) => { error_out(&message,error,capacity); -1 },
         Err(_) => { error_out("Gyroflow frame processing failed",error,capacity); -2 },
     }
+}
+
+/// Row-major output-pixel to input-pixel homography, padded to three float4 rows.
+/// This fast path is valid only for our current zero-residual-distortion, no-RS contract.
+#[no_mangle]
+pub unsafe extern "C" fn mc_engine_transform(engine: *mut Engine, timestamp_us: i64,
+    output: *mut f32, capacity: usize) -> i32 {
+    catch_unwind(AssertUnwindSafe(|| {
+        if engine.is_null() || output.is_null() || capacity < 12 { return -1; }
+        let e = &*engine;
+        let ms = timestamp_us as f64 / 1000.;
+        let frame = gyroflow_core::frame_at_timestamp(ms, e.transforms.scaled_fps) as usize;
+        let t = gyroflow_core::stabilization::FrameTransform::at_timestamp(&e.transforms, ms, frame);
+        let p = &t.kernel_params;
+        if e.transforms.digital_lens.is_some() || p.lens_correction_amount != 1.0
+            || p.light_refraction_coefficient != 1.0 || p.background_mode != 0
+            || t.matrices.len() != 1 || p.k.iter().any(|v| *v != 0.) || !t.mesh_data.is_empty()
+            || p.translation2d != [0.,0.] || p.input_horizontal_stretch != 1. || p.input_vertical_stretch != 1.
+            || t.matrices[0][9..].iter().any(|v| *v != 0.) { return -2; }
+        let r = &t.matrices[0];
+        let mut h = [0f32;12];
+        for col in 0..3 {
+            h[col] = p.f[0]*r[col] + p.c[0]*r[6+col];
+            h[4+col] = p.f[1]*r[3+col] + p.c[1]*r[6+col];
+            h[8+col] = r[6+col];
+        }
+        // Gyroflow keeps a logical output canvas at input resolution and maps the
+        // actual encoder viewport into it before reprojection.
+        for row in 0..3 {
+            h[row*4] *= e.transforms.output_width as f32 / e.ow as f32;
+            h[row*4+1] *= e.transforms.output_height as f32 / e.oh as f32;
+        }
+        if h.iter().any(|v| !v.is_finite()) { return -3; }
+        std::ptr::copy_nonoverlapping(h.as_ptr(),output,12);
+        0
+    })).unwrap_or(-4)
 }
 
 #[no_mangle]
@@ -326,6 +363,21 @@ mod tests {
         println!("black pixels across four frames: 1x={}, 2x={}", counts[0], counts[1]);
         assert!(counts[0] > 1000);
         assert!(counts[1] < counts[0]);
+    }
+    #[test]
+    fn native_transform_preserves_fov_at_half_resolution() {
+        for crop in [1., 5.] {
+            let mut config = fixture();
+            config.output_width = 320; config.output_height = 180;
+            config.options.allow_black_borders = true;
+            config.options.dynamic_crop = false; config.options.max_crop = crop;
+            let mut e = create(config).unwrap();
+            let mut h = [0f32;12];
+            assert_eq!(unsafe { mc_engine_transform(&mut e, 500000, h.as_mut_ptr(),12) },0);
+            let x = 32.; let y = 90.;
+            let u = (h[0]*x+h[1]*y+h[2])/(h[8]*x+h[9]*y+h[10]);
+            assert!((u-(320.-256./crop as f32)).abs() < 0.01, "crop={crop}, u={u}");
+        }
     }
     #[test]
     fn malformed_time_is_rejected() {

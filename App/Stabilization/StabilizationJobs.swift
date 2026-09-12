@@ -25,10 +25,14 @@ final class StabilizationJobs: ObservableObject {
         catch { states[key] = .failed(error.localizedDescription); return }
         pending.append(Job(directory: directory, options: selected)); states[key] = .queued; next()
     }
-    func setRecording(_ value: Bool) { recording = value; control?.pause(value); if !value { next() } }
+    private func updateIdleTimer() {
+        UIApplication.shared.isIdleTimerDisabled = foreground && (recording || active != nil || !pending.isEmpty)
+    }
+    func setRecording(_ value: Bool) { recording = value; control?.pause(value); if !value { next() }; updateIdleTimer() }
     func setForeground(_ value: Bool) {
         foreground = value
         if !value { control?.cancel() } else { next() }
+        updateIdleTimer()
     }
     func cancel(_ directory: URL) {
         pending.removeAll { $0.directory == directory }
@@ -41,6 +45,7 @@ final class StabilizationJobs: ObservableObject {
         let directory = job.directory
         let token = ProcessingControl()
         active = directory; control = token
+        updateIdleTimer()
         states[directory.lastPathComponent] = .processing(0)
         Task.detached(priority: .utility) { [weak self] in
             let result: Result<URL,Error>
@@ -68,6 +73,6 @@ final class StabilizationJobs: ObservableObject {
             }
             states[directory.lastPathComponent] = .failed(error is CancellationError ? "处理已停止，返回前台后可重试。" : error.localizedDescription)
         }
-        active = nil; control = nil; next()
+        active = nil; control = nil; next(); updateIdleTimer()
     }
 }
