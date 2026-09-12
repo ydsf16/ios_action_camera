@@ -27,7 +27,8 @@ pub struct Engine { transforms: gyroflow_core::stabilization::ComputeParams, use
 
 fn create(config: Config) -> Result<Engine, String> {
     if config.width < 4 || config.height < 4 || config.width > 4096 || config.height > 4096
-        || config.output_width < 4 || config.output_height < 4 || config.output_width > 1920 || config.output_height > 1920
+        || config.output_width < 4 || config.output_height < 4 || config.output_width > 2816 || config.output_height > 2816
+        || config.output_width > config.width || config.output_height > config.height
         || config.frames.len() < 2 || config.gyro.len() < 3 || !config.duration_ms.is_finite()
         || config.duration_ms <= 0.0 || config.duration_ms > 3_600_000.0 || !(1.0..=120.0).contains(&config.fps) {
         return Err("Invalid input dimensions, timing, or missing motion data".into());
@@ -377,6 +378,25 @@ mod tests {
             let x = 32.; let y = 90.;
             let u = (h[0]*x+h[1]*y+h[2])/(h[8]*x+h[9]*y+h[10]);
             assert!((u-(320.-256./crop as f32)).abs() < 0.01, "crop={crop}, u={u}");
+        }
+    }
+    #[test]
+    fn native_transform_preserves_fov_at_2_8k() {
+        for crop in [1., 5.] {
+            let mut config = fixture();
+            config.width = 3840; config.height = 2160;
+            config.output_width = 2816; config.output_height = 1584;
+            for frame in &mut config.frames {
+                for i in [0, 1, 2, 3, 4, 5] { frame.k[i] *= 6.; }
+            }
+            config.options.allow_black_borders = true;
+            config.options.dynamic_crop = false; config.options.max_crop = crop;
+            let mut engine = create(config).unwrap();
+            let mut h = [0f32; 12];
+            assert_eq!(unsafe { mc_engine_transform(&mut engine, 500000, h.as_mut_ptr(), 12) }, 0);
+            let x = 281.6; let y = 792.;
+            let u = (h[0]*x+h[1]*y+h[2])/(h[8]*x+h[9]*y+h[10]);
+            assert!((u-(1920.-1536./crop as f32)).abs() < 0.01, "crop={crop}, u={u}");
         }
     }
     #[test]

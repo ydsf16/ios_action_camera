@@ -36,6 +36,7 @@ public struct RecordingManifest: Codable {
     public var createdAt: Date
     public var status = "recording"
     public var appVersion: String
+    public var appBuild: String?
     public var deviceModel: String
     public var systemVersion: String
     public var camera: String
@@ -71,6 +72,7 @@ public struct RecordingManifest: Codable {
     public var gravityReferenceFrame = "xArbitraryZVertical"
     // Optional fields preserve decoding of existing recording packages.
     public var exposurePolicy: String?
+    public var captureBufferStrategy: String?
     public var maximumAutoExposureSeconds: Double?
     public var continuousAutoFocusEnabled: Bool?
     public var systemTimestampSynchronizationEnabled: Bool?

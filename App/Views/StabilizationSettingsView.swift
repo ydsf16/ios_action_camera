@@ -12,6 +12,15 @@ struct StabilizationSettingsView: View {
     }
     var body: some View {
         Form {
+            Section("导出") {
+                Picker("分辨率", selection: $options.exportResolution) {
+                    ForEach(ExportResolution.allCases) { resolution in
+                        Text(resolution.label).tag(resolution)
+                    }
+                }
+                Text("1080p：1920×1080；2.8K：2816×1584，横竖屏自动适配。保留原片帧率，输出不超过原片尺寸；1080p 原片选择 2.8K 时仍输出 1080p。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
             Section("稳定强度") {
                 LabeledContent("强度", value: "\(Int(options.strength * 100))%")
                 Slider(value: $options.strength, in: 0...1, step: 0.05)
@@ -49,6 +58,6 @@ struct StabilizationSettingsView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
-        .navigationTitle("稳定参数").navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("稳定与导出").navigationBarTitleDisplayMode(.inline)
     }
 }

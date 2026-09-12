@@ -25,7 +25,15 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     @Published private(set) var exposurePolicy = CaptureExposurePolicy.load()
     private var activeExposurePolicy = CaptureExposurePolicy.load()
     @Published private(set) var focusLabel = "准备中"
-    @Published private(set) var formatLabel = "4K · 30"
+    @Published private(set) var selectedFormat = CaptureFormat.load()
+    @Published private(set) var availableFormats: [CaptureFormat] = []
+    var formatLabel: String { selectedFormat.label }
+    var availableResolutions: [CaptureResolution] {
+        CaptureResolution.allCases.filter { resolution in availableFormats.contains { $0.resolution == resolution } }
+    }
+    var availableFrameRates: [Int] { availableFormats.filter { $0.resolution == selectedFormat.resolution }.map(\.fps) }
+    private var activeCaptureFormat = CaptureFormat.load()
+    private var formatChoices: [CaptureFormat: AVCaptureDevice.Format] = [:]
     @Published private(set) var duration = 0.0
     @Published private(set) var latestDirectory: URL?
     @Published var message: String?
@@ -177,50 +185,130 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         do {
             guard session.canAddInput(replacement) else { throw CaptureFailure.message("无法切换镜头。") }
             session.addInput(replacement)
-            try configureFormat(device)
+            let choices = supportedFormats(device)
+            guard let selected = activeCaptureFormat.resolved(in: CaptureFormat.candidates.filter { choices[$0] != nil }),
+                  let format = choices[selected] else { throw CaptureFailure.message("此镜头没有支持的录制格式。") }
+            try configureFormat(device, selection: selected, format: format)
             cameraInput = replacement
-            guard let connection = videoOutput.connection(with: .video) else { throw CaptureFailure.message("视频连接不可用。") }
-            connection.preferredVideoStabilizationMode = .off
-            guard connection.isVideoRotationAngleSupported(0) else { throw CaptureFailure.message("无法保持相机原始像素方向。") }
-            connection.videoRotationAngle = 0
-            if connection.isVideoMirroringSupported {
-                connection.automaticallyAdjustsVideoMirroring = false
-                connection.isVideoMirrored = false
-            }
-            if connection.isCameraIntrinsicMatrixDeliverySupported { connection.isCameraIntrinsicMatrixDeliveryEnabled = true }
-            let size = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
+            try configureVideoConnection()
+            let changed = selected != activeCaptureFormat
+            activeCaptureFormat = selected; formatChoices = choices
+            selected.save()
             let focus = device.focusMode == .continuousAutoFocus ? "连续自动对焦" : "此镜头为固定对焦"
-            publish { $0.focusLabel = focus; $0.selectedLens = lens.id; $0.formatLabel = size.width >= 3840 ? "4K · 30" : "1080p · 30" }
+            publish {
+                $0.focusLabel = focus; $0.selectedLens = lens.id; $0.selectedFormat = selected
+                $0.availableFormats = CaptureFormat.candidates.filter { choices[$0] != nil }
+                if changed { $0.message = "此镜头已使用支持的格式：\(selected.label) fps。" }
+            }
         } catch {
             if session.inputs.contains(replacement) { session.removeInput(replacement) }
-            if let previous, session.canAddInput(previous) { session.addInput(previous) }
             cameraInput = previous
+            // Re-adding an input resets frame durations; restore them on rollback.
+            if let previous, session.canAddInput(previous) {
+                session.addInput(previous)
+                if let format = formatChoices[activeCaptureFormat] {
+                    try configureFormat(previous.device, selection: activeCaptureFormat, format: format)
+                    try configureVideoConnection()
+                }
+            }
             throw error
         }
     }
 
-    private func configureFormat(_ device: AVCaptureDevice) throws {
-        var selected: AVCaptureDevice.Format?
-        for width in [3840, 1920] {
-            selected = device.formats.first { format in
-                let size = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
-                return size.width == width && size.height == (width == 3840 ? 2160 : 1080)
-                    && CMFormatDescriptionGetMediaSubType(format.formatDescription) == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
-                    && format.videoSupportedFrameRateRanges.contains { $0.minFrameRate <= 30 && $0.maxFrameRate >= 30 }
-            }
-            if selected != nil { break }
+    private func configureVideoConnection() throws {
+        guard let connection = videoOutput.connection(with: .video) else { throw CaptureFailure.message("视频连接不可用。") }
+        if connection.isVideoStabilizationSupported { connection.preferredVideoStabilizationMode = .off }
+        guard connection.isVideoRotationAngleSupported(0) else { throw CaptureFailure.message("无法保持相机原始像素方向。") }
+        connection.videoRotationAngle = 0
+        if connection.isVideoMirroringSupported {
+            connection.automaticallyAdjustsVideoMirroring = false
+            connection.isVideoMirrored = false
         }
-        guard let selected else { throw CaptureFailure.message("此镜头不支持所需的 30fps SDR 格式。") }
+        if connection.isCameraIntrinsicMatrixDeliverySupported { connection.isCameraIntrinsicMatrixDeliveryEnabled = true }
+    }
+
+    private func supportedFormats(_ device: AVCaptureDevice) -> [CaptureFormat: AVCaptureDevice.Format] {
+        var choices: [CaptureFormat: AVCaptureDevice.Format] = [:]
+        for candidate in CaptureFormat.candidates {
+            choices[candidate] = device.formats.first { format in
+                let size = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                return size.width == candidate.resolution.width && size.height == candidate.resolution.height
+                    && CMFormatDescriptionGetMediaSubType(format.formatDescription) == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+                    && format.videoSupportedFrameRateRanges.contains { $0.minFrameRate <= Double(candidate.fps) && $0.maxFrameRate >= Double(candidate.fps) }
+            }
+        }
+        return choices
+    }
+
+    /// Called inside a session configuration transaction. Only native SDR formats are offered.
+    private func configureFormat(_ device: AVCaptureDevice, selection: CaptureFormat, format: AVCaptureDevice.Format) throws {
+        if let limit = activeExposurePolicy.maximumExposureMilliseconds,
+           format.minExposureDuration.seconds > Double(limit) / 1000 {
+            throw CaptureFailure.message("此格式不支持当前曝光上限，请先切换曝光模式。")
+        }
         try device.lockForConfiguration()
         defer { device.unlockForConfiguration() }
-        device.activeFormat = selected
-        device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 30)
-        device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 30)
+        device.activeFormat = format
+        if #available(iOS 18.0, *), device.activeFormat.isAutoVideoFrameRateSupported { device.isAutoVideoFrameRateEnabled = false }
+        let duration = CMTime(value: 1, timescale: CMTimeScale(selection.fps))
+        if CMTimeCompare(duration, device.activeVideoMaxFrameDuration) > 0 {
+            device.activeVideoMaxFrameDuration = duration
+            device.activeVideoMinFrameDuration = duration
+        } else {
+            device.activeVideoMinFrameDuration = duration
+            device.activeVideoMaxFrameDuration = duration
+        }
         device.automaticallyAdjustsVideoHDREnabled = false
-        if selected.isVideoHDRSupported { device.isVideoHDREnabled = false }
+        if format.isVideoHDRSupported { device.isVideoHDREnabled = false }
         device.videoZoomFactor = 1
         try applyRecordingControlsLocked(device)
         if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) { device.whiteBalanceMode = .continuousAutoWhiteBalance }
+    }
+
+    func selectResolution(_ resolution: CaptureResolution) {
+        queue.async { [self] in
+            let desired = CaptureFormat(resolution: resolution, fps: activeCaptureFormat.fps)
+            let supported = CaptureFormat.candidates.filter { $0.resolution == resolution && formatChoices[$0] != nil }
+            if let selected = desired.resolved(in: supported) { selectFormatOnQueue(selected) }
+        }
+    }
+
+    func selectFrameRate(_ fps: Int) {
+        queue.async { [self] in selectFormatOnQueue(CaptureFormat(resolution: activeCaptureFormat.resolution, fps: fps)) }
+    }
+
+    private func selectFormatOnQueue(_ selection: CaptureFormat) {
+        guard configured, wantsActive, recorder == nil, !isFinishing,
+              let device = cameraInput?.device, let format = formatChoices[selection], selection != activeCaptureFormat else { return }
+        let previous = activeCaptureFormat
+        let previousFormat = device.activeFormat
+        publish { $0.phase = .preparing }
+        session.stopRunning()
+        session.beginConfiguration()
+        do {
+            try configureFormat(device, selection: selection, format: format)
+            try configureVideoConnection()
+            activeCaptureFormat = selection
+            selection.save()
+            publish { $0.selectedFormat = selection }
+        } catch {
+            let failure = error
+            do {
+                try configureFormat(device, selection: previous, format: previousFormat)
+                try configureVideoConnection()
+            } catch {
+                // Leave a clean, retryable session if restoration itself fails.
+                session.inputs.forEach(session.removeInput); session.outputs.forEach(session.removeOutput)
+                cameraInput = nil; configured = false
+                session.commitConfiguration()
+                stopMotion()
+                publish { $0.phase = .unavailable; $0.message = "恢复相机配置失败，请重新进入应用。" }
+                return
+            }
+            publish { $0.message = failure.localizedDescription }
+        }
+        session.commitConfiguration()
+        resumeIfPossible()
     }
 
     /// Caller holds the device configuration lock. Reapply after format changes.
@@ -290,7 +378,14 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     private func writeConfigurationReport() {
         guard let device = cameraInput?.device else { return }
         let maximum = device.activeMaxExposureDuration.seconds
+        let size = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
         let report: [String: Any] = ["focus_mode": device.focusMode.rawValue,
+            "width": size.width, "height": size.height, "requested_fps": activeCaptureFormat.fps,
+            "min_frame_duration_seconds": device.activeVideoMinFrameDuration.seconds,
+            "max_frame_duration_seconds": device.activeVideoMaxFrameDuration.seconds,
+            "available_formats": CaptureFormat.candidates.filter { formatChoices[$0] != nil }.map {
+                ["resolution": $0.resolution.label, "width": $0.resolution.width, "height": $0.resolution.height, "fps": $0.fps] as [String: Any]
+            },
             "continuous_autofocus": device.focusMode == .continuousAutoFocus,
             "exposure_policy": activeExposurePolicy.rawValue, "exposure_mode": device.exposureMode.rawValue,
             "max_exposure_seconds": maximum.isFinite ? maximum as Any : NSNull(),
@@ -319,12 +414,17 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
                 guard connection.activeVideoStabilizationMode == .off else {
                     throw CaptureFailure.message("系统视频防抖尚未关闭，请重新进入相机。")
                 }
+                let frameDuration = CMTime(value: 1, timescale: CMTimeScale(activeCaptureFormat.fps))
+                guard CMTimeCompare(device.activeVideoMinFrameDuration, frameDuration) == 0,
+                      CMTimeCompare(device.activeVideoMaxFrameDuration, frameDuration) == 0 else {
+                    throw CaptureFailure.message("相机帧率与所选格式不一致，请重新选择录制格式。")
+                }
                 do {
                     try device.lockForConfiguration()
                     defer { device.unlockForConfiguration() }
                     try applyRecordingControlsLocked(device)
                 }
-                let recording = try RecordingWriter(root: Self.recordingsRoot, device: device, connection: connection, rotationDegrees: recordingRotationDegrees, exposurePolicy: activeExposurePolicy.rawValue)
+                let recording = try RecordingWriter(root: Self.recordingsRoot, device: device, connection: connection, rotationDegrees: recordingRotationDegrees, exposurePolicy: activeExposurePolicy.rawValue, captureFormat: activeCaptureFormat)
                 recorder = recording
                 acceptsMotion = true
                 for kind in ["gyro", "accelerometer", "gravity"] {

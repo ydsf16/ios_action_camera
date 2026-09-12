@@ -47,7 +47,11 @@ struct CameraView: View {
                     Text(recording ? timer : "MotionCam")
                         .font(.system(.headline, design: .monospaced)).foregroundStyle(recording ? .red : .white)
                     Spacer()
-                    Text(camera.formatLabel).font(.subheadline.weight(.semibold))
+                    Menu {
+                        CaptureFormatControls(camera: camera)
+                    } label: {
+                        Text(camera.formatLabel).font(.subheadline.weight(.semibold))
+                    }.disabled(camera.phase != .ready).accessibilityLabel("录制格式")
                     Button { showSettings = true } label: { Image(systemName: "gearshape").frame(width: 44, height: 44) }
                         .disabled(recording || camera.phase == .finishing).accessibilityLabel("设置")
                 }
@@ -137,8 +141,8 @@ struct CameraView: View {
         .onChange(of: scenePhase) { _, value in
             if value == .active {
                 jobs.setForeground(true)
-                camera.setActive(!showLibrary && !showSettings)
-                if !showLibrary && !showSettings { Task { await camera.prepare() } }
+                camera.setActive(!showLibrary)
+                if !showLibrary { Task { await camera.prepare() } }
             }
             else if value == .background { jobs.setForeground(false); camera.setActive(false) }
         }
@@ -207,6 +211,22 @@ private struct CameraPreview: UIViewRepresentable {
     }
 }
 
+private struct CaptureFormatControls: View {
+    @ObservedObject var camera: CaptureService
+    var body: some View {
+        if camera.availableFormats.isEmpty {
+            LabeledContent("录制格式", value: "准备中")
+        } else {
+            Picker("分辨率", selection: Binding(get: { camera.selectedFormat.resolution }, set: camera.selectResolution)) {
+                ForEach(camera.availableResolutions) { resolution in Text(resolution.label).tag(resolution) }
+            }
+            Picker("帧率", selection: Binding(get: { camera.selectedFormat.fps }, set: camera.selectFrameRate)) {
+                ForEach(camera.availableFrameRates, id: \.self) { fps in Text("\(fps) fps").tag(fps) }
+            }
+        }
+    }
+}
+
 private struct RecordingSettingsView: View {
     @ObservedObject var camera: CaptureService
     @Environment(\.dismiss) private var dismiss
@@ -214,7 +234,7 @@ private struct RecordingSettingsView: View {
         NavigationStack {
             List {
                 Section("录制") {
-                    LabeledContent("格式", value: "4K / 30fps · SDR")
+                    CaptureFormatControls(camera: camera).disabled(camera.phase != .ready)
                     LabeledContent("自动对焦", value: camera.focusLabel)
                     Picker("曝光模式", selection: Binding(get: { camera.exposurePolicy }, set: camera.selectExposurePolicy)) {
                         ForEach(CaptureExposurePolicy.allCases) { policy in Text(policy.title).tag(policy) }
@@ -225,11 +245,11 @@ private struct RecordingSettingsView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                     LabeledContent("声音", value: "开启")
                     LabeledContent("方向", value: "自动横竖屏")
-                    Text("不支持 4K 的镜头自动使用 1080p。录制期间镜头固定。")
+                    Text("仅显示当前镜头支持的格式。录制期间格式和镜头固定；60 fps 会增加存储和处理量。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("稳定处理") {
-                    NavigationLink("默认稳定参数") { StabilizationSettingsView() }
+                    NavigationLink("默认稳定与导出参数") { StabilizationSettingsView() }
                 }
                 Section("保存") {
                     Text("视频和运动数据保存在本机，可从素材预览保存视频到相册。")

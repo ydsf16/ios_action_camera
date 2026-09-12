@@ -75,9 +75,11 @@ enum StabilizationProcessor {
             reader.add(output); audioReader = output
         }
         let writer = try AVAssetWriter(outputURL: temporary, fileType: .mov)
+        writer.movieTimeScale = 1_000_000
         let videoWriter = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: config.output_width, AVVideoHeightKey: config.output_height,
-            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 16_000_000, AVVideoAllowFrameReorderingKey: false]])
+            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: CaptureFormat.videoBitRate(width: config.output_width, height: config.output_height, fps: Int(config.fps)),
+                AVVideoExpectedSourceFrameRateKey: Int(config.fps), AVVideoAllowFrameReorderingKey: false]])
         videoWriter.mediaTimeScale = 1_000_000
         videoWriter.transform = try await videoTrack.load(.preferredTransform)
         guard writer.canAdd(videoWriter) else { throw InputError("无法创建视频编码器。") }
@@ -202,7 +204,7 @@ enum StabilizationProcessor {
                     if rendered % 15 == 0 { progress(Double(rendered)/Double(config.frames.count)*0.95) }
                 }
                 let duration = CMSampleBufferGetDuration(sample)
-                endTime = CMTimeAdd(pts, duration.isNumeric && duration.seconds > 0 ? duration : CMTime(value: 1,timescale: 30))
+                endTime = CMTimeAdd(pts, duration.isNumeric && duration.seconds > 0 ? duration : CMTime(value: 1, timescale: CMTimeScale(config.fps)))
                 count += 1
             }
         }
@@ -219,7 +221,7 @@ enum StabilizationProcessor {
         guard writer.status == .completed else { throw writer.error ?? InputError("稳定视频封装失败。") }
         measured("finish_audio_container_seconds")
         let receipt: [String:Any] = ["engine":"Gyroflow 1.6.3", "backend":legacy ? "Metal (wgpu BGRA benchmark)" : "Metal NV12 IOSurface", "timings":timings, "max_inflight_frames":legacy ? 1 : 3, "app_cpu_pixel_copies_per_frame":legacy ? 2 : 0, "interpolation":"Lanczos4", "processing_seconds":Date().timeIntervalSince(processingStarted), "options": try JSONSerialization.jsonObject(with: JSONEncoder().encode(options)), "input_frames":count,"output_width":config.output_width,
-            "output_height":config.output_height,"rolling_shutter":false,"horizon_lock":false,
+            "output_height":config.output_height,"requested_fps":config.fps,"rolling_shutter":false,"horizon_lock":false,
             "lens_model":"recorded per-frame K; uncalibrated zero residual distortion", "created_at":ISO8601DateFormatter().string(from:Date())]
         try JSONSerialization.data(withJSONObject:receipt,options:[.prettyPrinted,.sortedKeys])
             .write(to:directory.appendingPathComponent("stabilization.json"),options:.atomic)

@@ -17,6 +17,7 @@ parser.add_argument("directory", type=Path, help="New output directory")
 parser.add_argument("--seconds", type=int, default=2)
 parser.add_argument("--width", type=int, default=1920)
 parser.add_argument("--height", type=int, default=1080)
+parser.add_argument("--fps", type=int, choices=[24, 30, 60], default=30)
 parser.add_argument("--motion", action="store_true", help="Synthetic gyro for border/render regression only")
 args = parser.parse_args()
 if not 1 <= args.seconds <= 300 or args.width < 4 or args.height < 4 or args.width % 2 or args.height % 2:
@@ -24,11 +25,11 @@ if not 1 <= args.seconds <= 300 or args.width < 4 or args.height < 4 or args.wid
 args.directory.mkdir(parents=True, exist_ok=False)
 manifest = json.loads((Path(__file__).resolve().parents[1] / "Tests/Fixtures/export-manifest.json").read_text())
 manifest["id"] = args.directory.name
-manifest.update(durationSeconds=args.seconds, width=args.width, height=args.height,
-                videoFrames=args.seconds*30, framesWithIntrinsics=args.seconds*30, gyroSamples=args.seconds*100+31)
+manifest.update(durationSeconds=args.seconds, width=args.width, height=args.height, requestedFPS=args.fps,
+                videoFrames=args.seconds*args.fps, framesWithIntrinsics=args.seconds*args.fps, gyroSamples=args.seconds*100+31)
 video = args.directory / "video.mov"
 subprocess.run([
-    "ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"testsrc2=size={args.width}x{args.height}:rate=30:duration={args.seconds}",
+    "ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"testsrc2=size={args.width}x{args.height}:rate={args.fps}:duration={args.seconds}",
     "-f", "lavfi", "-i", f"sine=frequency=440:sample_rate=48000:duration={args.seconds}",
     "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
     "-c:a", "aac", "-video_track_timescale", "1000000", "-shortest", str(video)

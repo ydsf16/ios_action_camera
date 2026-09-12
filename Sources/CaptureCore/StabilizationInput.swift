@@ -49,8 +49,11 @@ public struct StabilizationInput: Codable {
         guard zip(times,times.dropFirst()).allSatisfy({ $0.1-$0.0 < 0.1 }) else { throw InputError("IMU 有较大的采样缺口。") }
         let gx = try motion.column("gx_rad_s"), gy = try motion.column("gy_rad_s"), gz = try motion.column("gz_rad_s")
         let width = manifest.width, height = manifest.height
-        guard width >= 1920, width <= 4096, height > 0, height <= 4096 else { throw InputError("录制尺寸暂不支持。") }
-        let outWidth = 1920, outHeight = Int((Double(height) * 1920 / Double(width) / 2).rounded()) * 2
+        guard width >= 1280, width <= 4096, height > 0, height <= 4096,
+              width.isMultiple(of: 2), height.isMultiple(of: 2) else { throw InputError("录制尺寸暂不支持。") }
+        guard (1...120).contains(manifest.requestedFPS) else { throw InputError("素材帧率无效。") }
+        let outWidth = min(width, options.exportResolution.width)
+        let outHeight = Int((Double(height) * Double(outWidth) / Double(width) / 2).rounded()) * 2
         return Self(options: options, width: width, height: height, output_width: outWidth, output_height: outHeight,
             duration_ms: manifest.durationSeconds * 1000, fps: Double(manifest.requestedFPS),
             frames: video.indices.map { Frame(timestamp_us: Int64((video[$0]*1e6).rounded()), k: matrices[$0]) },

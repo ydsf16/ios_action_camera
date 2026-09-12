@@ -87,3 +87,41 @@ increased motion blur. The new 10 ms ceiling is a candidate compromise, pending
 same-scene device validation; no exposure measurements of that scene are yet
 available. A 1/100 s shutter is a common choice for 50 Hz lighting, while LED PWM
 may require another duration. See [Sony's shutter recommendations](https://www.sony.com/electronics/support/camcorders-and-video-cameras-hard-drive-camcorders/articles/00122281).
+
+## Capture formats (0.5.0)
+
+- Native 16:9 SDR/NV12 formats are discovered per physical lens for 1920×1080
+  and 3840×2160 at 24, 30, and 60 fps. The UI lists supported combinations
+  only; resolution changes choose the closest supported frame rate when needed.
+  Lens changes retain the requested frame rate if possible, otherwise choose a
+  supported fallback and report it. Successful choices persist; existing installs
+  without preferences start at 4K30 when supported.
+- Format changes run on the capture queue inside a session configuration transaction,
+  with recording disabled. Both frame-duration bounds are set to 1/fps; automatic
+  frame-rate changes are disabled on supported iOS 18+ formats. Exposure policy,
+  autofocus, native pixel orientation, intrinsics delivery, and stabilization-off
+  settings are reapplied. Failed changes restore the previous configuration.
+- `requestedFPS` now records the selected rate. Source PTS and the original host-clock
+  conversion remain authoritative; frames are not renumbered to synthesize timestamps.
+  Encoder rate hints and duration fallback use the selected rate. Bitrate scales with
+  size and fps; actual dropped frames remain visible in `drops.csv` and the manifest.
+- Stabilized output keeps source timestamps/fps. `exportResolution` independently
+  selects `fullHD` (1920×1080) or `action2_8K` (2816×1584), capped at the source size.
+  Old options without the field retain their original smoothing/crop settings and
+  default to 1080p. Legacy 720p clips remain importable, but 720p is no longer offered
+  for recording; saved 720p recording preferences migrate to 1080p at the same fps.
+  Configuration reports expose the native dimensions, requested fps,
+  both read-back frame durations and the supported mode list for device verification.
+- Movie and video-track timescales use microseconds to avoid millisecond truncation
+  of 24/60 fps clip endings. A one-microsecond final-sample rounding difference is
+  possible when a rational frame duration is represented on that timescale.
+- On 60 fps captures, `CaptureBufferCopier` uses a bounded pool of eight native NV12
+  IOSurfaces and an exact Metal blit before encoding. This returns scarce camera
+  buffers promptly instead of allowing the encoder to exhaust the capture pool.
+  No CPU pixel mapping or color conversion occurs. 24/30 fps retain the direct path.
+  Pixel/CM attachments and original sample timing propagate to the copied sample;
+  per-frame K and clock mapping still come from the original camera sample.
+  `capture_copy_pool_full` records backpressure at the pool limit. Optional manifest
+  fields `appBuild` and `captureBufferStrategy` distinguish this path from older clips.
+- [Apple: format and frame durations must be configured together](https://developer.apple.com/documentation/avfoundation/avcapturedevice/activeformat).
+- [Apple TN2445: buffer lifetime and capture drops](https://developer.apple.com/library/archive/technotes/tn2445/_index.html).

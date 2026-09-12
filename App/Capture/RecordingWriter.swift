@@ -23,6 +23,7 @@ final class RecordingWriter {
     private var assetWriter: AVAssetWriter?
     private var videoInput: AVAssetWriterInput?
     private var audioInput: AVAssetWriterInput?
+    private var captureBufferCopier: CaptureBufferCopier?
     private var timeline = VideoTimeline()
     private var lastAudioPTS: CMTime?
     private var lastVideoEnd: CMTime?
@@ -30,7 +31,7 @@ final class RecordingWriter {
     private var errorMessage: String?
     private var csvClosed = false
 
-    init(root: URL, device: AVCaptureDevice, connection: AVCaptureConnection, rotationDegrees: Int, exposurePolicy: String) throws {
+    init(root: URL, device: AVCaptureDevice, connection: AVCaptureConnection, rotationDegrees: Int, exposurePolicy: String, captureFormat: CaptureFormat) throws {
         let date = Date()
         let format = DateFormatter()
         format.locale = Locale(identifier: "en_US_POSIX")
@@ -51,6 +52,9 @@ final class RecordingWriter {
             stabilizationActive: connection.activeVideoStabilizationMode.rawValue,
             intrinsicsDeliveryEnabled: connection.isCameraIntrinsicMatrixDeliveryEnabled)
         manifest.displayRotationDegrees = rotationDegrees
+        manifest.requestedFPS = captureFormat.fps
+        manifest.appBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        manifest.captureBufferStrategy = captureFormat.fps >= 60 ? "metal_nv12_owned_pool_8" : "camera_buffers_direct"
         let maximumExposure = device.activeMaxExposureDuration.seconds
         manifest.maximumAutoExposureSeconds = maximumExposure.isFinite ? maximumExposure : nil
         manifest.exposurePolicy = exposurePolicy
@@ -93,11 +97,13 @@ final class RecordingWriter {
         guard let pixel = CMSampleBufferGetImageBuffer(sample) else { throw CaptureFailure.message("没有视频图像。") }
         let width = CVPixelBufferGetWidth(pixel), height = CVPixelBufferGetHeight(pixel)
         manifest.width = width; manifest.height = height
+        if manifest.requestedFPS >= 60 { captureBufferCopier = try CaptureBufferCopier(width: width, height: height) }
         let writer = try AVAssetWriter(outputURL: directory.appendingPathComponent("video.partial.mov"), fileType: .mov)
+        writer.movieTimeScale = 1_000_000
         let settings: [String: Any] = [AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: width, AVVideoHeightKey: height,
-            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: width >= 3840 ? 50_000_000 : 16_000_000,
-                AVVideoExpectedSourceFrameRateKey: 30, AVVideoAllowFrameReorderingKey: false,
+            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: CaptureFormat.videoBitRate(width: width, height: height, fps: manifest.requestedFPS),
+                AVVideoExpectedSourceFrameRateKey: manifest.requestedFPS, AVVideoAllowFrameReorderingKey: false,
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel]]
         let video = AVAssetWriterInput(mediaType: .video, outputSettings: settings,
                                       sourceFormatHint: CMSampleBufferGetFormatDescription(sample))
@@ -130,8 +136,15 @@ final class RecordingWriter {
             if manifest.videoFrames == 0 { throw CaptureFailure.message("编码器尚未就绪，请重试录制。") }
             try drop("video", pts: pts, reason: "encoder_backpressure"); return
         }
+        let encoderSample: CMSampleBuffer
+        if let captureBufferCopier {
+            guard let copy = try captureBufferCopier.copy(sample) else {
+                try drop("video", pts: pts, reason: "capture_copy_pool_full"); return
+            }
+            encoderSample = copy
+        } else { encoderSample = sample }
         let relative = try timeline.accept(MediaTime(pts))
-        guard input.append(sample) else { throw writer.error ?? CaptureFailure.message("视频帧写入失败。") }
+        guard input.append(encoderSample) else { throw writer.error ?? CaptureFailure.message("视频帧写入失败。") }
         if manifest.firstVideoPTS == nil {
             manifest.firstVideoPTS = MediaTime(pts)
             manifest.firstVideoHostSeconds = host
@@ -143,7 +156,7 @@ final class RecordingWriter {
         try frames.append("\(manifest.videoFrames),\(pts.value),\(pts.timescale),\(host),\(relative),\(manifest.width),\(manifest.height),\(matrix),\(device.exposureDuration.seconds),\(device.iso),\(device.lensPosition),\(device.videoZoomFactor),\(connection.activeVideoStabilizationMode.rawValue)")
         manifest.videoFrames += 1
         let duration = CMSampleBufferGetDuration(sample)
-        let validDuration = duration.isNumeric && duration.seconds > 0 ? duration : CMTime(value: 1, timescale: 30)
+        let validDuration = duration.isNumeric && duration.seconds > 0 ? duration : CMTime(value: 1, timescale: CMTimeScale(manifest.requestedFPS))
         lastVideoEnd = CMTimeAdd(pts, validDuration)
         manifest.durationSeconds = relative + validDuration.seconds
     }
