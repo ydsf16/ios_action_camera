@@ -3,7 +3,7 @@ import AVFoundation
 
 struct CameraView: View {
     @StateObject private var camera = CaptureService()
-    @ObservedObject private var jobs = StabilizationJobs.shared
+    private let jobs = StabilizationJobs.shared
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var showLibrary = false
@@ -112,7 +112,7 @@ struct CameraView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black).foregroundStyle(.white)
         .sheet(isPresented: $showLibrary) { RecordingLibraryView() }
-        .sheet(isPresented: $showSettings) { RecordingSettingsView(focusLabel: camera.focusLabel) }
+        .sheet(isPresented: $showSettings) { RecordingSettingsView(camera: camera) }
         .alert("拍摄提示", isPresented: Binding(get: { camera.message != nil }, set: { if !$0 { camera.message = nil } })) {
             Button("知道了", role: .cancel) { camera.message = nil }
         } message: { Text(camera.message ?? "") }
@@ -162,10 +162,14 @@ private struct CameraPreview: UIViewRepresentable {
     var rotationChanged: (Int) -> Void
     class PreviewView: UIView {
         var rotationChanged: ((Int) -> Void)?
+        private var reportedAngle: Int?
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
         var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
         override func layoutSubviews() {
             super.layoutSubviews()
+            updateOrientation()
+        }
+        func updateOrientation() {
             let angle: Int
             switch window?.windowScene?.interfaceOrientation {
             case .landscapeLeft: angle = 180
@@ -173,11 +177,21 @@ private struct CameraPreview: UIViewRepresentable {
             case .portraitUpsideDown: angle = 270
             default: angle = 90
             }
-            rotationChanged?(angle)
-            if let connection = previewLayer.connection, connection.isVideoRotationAngleSupported(CGFloat(angle)) {
+            if reportedAngle != angle {
+                reportedAngle = angle
+                rotationChanged?(angle)
+            }
+            guard let connection = previewLayer.connection else { return }
+            // SwiftUI progress/timer updates must not reconfigure an unchanged camera connection.
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            if connection.videoRotationAngle != CGFloat(angle), connection.isVideoRotationAngleSupported(CGFloat(angle)) {
                 connection.videoRotationAngle = CGFloat(angle)
+            }
+            if connection.isVideoStabilizationSupported, connection.preferredVideoStabilizationMode != .off {
                 connection.preferredVideoStabilizationMode = .off
             }
+            CATransaction.commit()
         }
     }
     func makeUIView(context: Context) -> PreviewView {
@@ -187,19 +201,25 @@ private struct CameraPreview: UIViewRepresentable {
         view.previewLayer.videoGravity = .resizeAspectFill
         return view
     }
-    func updateUIView(_ view: PreviewView, context: Context) { view.setNeedsLayout() }
+    func updateUIView(_ view: PreviewView, context: Context) {
+        view.rotationChanged = rotationChanged
+        view.updateOrientation()
+    }
 }
 
 private struct RecordingSettingsView: View {
-    let focusLabel: String
+    @ObservedObject var camera: CaptureService
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
             List {
                 Section("录制") {
                     LabeledContent("格式", value: "4K / 30fps · SDR")
-                    LabeledContent("自动对焦", value: focusLabel)
-                    LabeledContent("曝光时间上限", value: "5 ms · 1/200 秒")
+                    LabeledContent("自动对焦", value: camera.focusLabel)
+                    Picker("曝光模式", selection: Binding(get: { camera.exposurePolicy }, set: camera.selectExposurePolicy)) {
+                        ForEach(CaptureExposurePolicy.allCases) { policy in Text(policy.title).tag(policy) }
+                    }.disabled(camera.phase != .ready)
+                    Text(camera.exposurePolicy.explanation).font(.footnote).foregroundStyle(.secondary)
                     LabeledContent("视频／IMU 时钟同步", value: "开启")
                     Text("自动曝光和 ISO 调节保留。使用系统时间戳对齐，不代表硬件触发同步。")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -221,7 +241,7 @@ private struct RecordingSettingsView: View {
                     Text("包含 Gyroflow 1.6.3 · GPLv3").font(.footnote).foregroundStyle(.secondary)
                 }
                 Section {
-                    Text("0.3.0 · 方向与稳定参数\n录制结束后自动生成稳定视频，原片始终保留。")
+                    Text("版本 \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—") · \(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—")\n录制结束后自动生成稳定视频，原片始终保留。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

@@ -30,7 +30,7 @@ final class RecordingWriter {
     private var errorMessage: String?
     private var csvClosed = false
 
-    init(root: URL, device: AVCaptureDevice, connection: AVCaptureConnection, rotationDegrees: Int) throws {
+    init(root: URL, device: AVCaptureDevice, connection: AVCaptureConnection, rotationDegrees: Int, exposurePolicy: String) throws {
         let date = Date()
         let format = DateFormatter()
         format.locale = Locale(identifier: "en_US_POSIX")
@@ -51,7 +51,9 @@ final class RecordingWriter {
             stabilizationActive: connection.activeVideoStabilizationMode.rawValue,
             intrinsicsDeliveryEnabled: connection.isCameraIntrinsicMatrixDeliveryEnabled)
         manifest.displayRotationDegrees = rotationDegrees
-        manifest.maximumAutoExposureSeconds = device.activeMaxExposureDuration.seconds
+        let maximumExposure = device.activeMaxExposureDuration.seconds
+        manifest.maximumAutoExposureSeconds = maximumExposure.isFinite ? maximumExposure : nil
+        manifest.exposurePolicy = exposurePolicy
         manifest.continuousAutoFocusEnabled = device.focusMode == .continuousAutoFocus
         manifest.systemTimestampSynchronizationEnabled = true
         manifest.hardwareTriggeredSynchronizationEnabled = false

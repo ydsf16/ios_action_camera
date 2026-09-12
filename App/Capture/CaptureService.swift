@@ -22,6 +22,8 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     @Published private(set) var phase: CameraPhase = .preparing
     @Published private(set) var lenses: [CameraLens] = []
     @Published private(set) var selectedLens = ""
+    @Published private(set) var exposurePolicy = CaptureExposurePolicy.load()
+    private var activeExposurePolicy = CaptureExposurePolicy.load()
     @Published private(set) var focusLabel = "准备中"
     @Published private(set) var formatLabel = "4K · 30"
     @Published private(set) var duration = 0.0
@@ -222,17 +224,38 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     }
 
     /// Caller holds the device configuration lock. Reapply after format changes.
-    private func applyRecordingControlsLocked(_ device: AVCaptureDevice) throws {
+    private func applyRecordingControlsLocked(_ device: AVCaptureDevice, policy: CaptureExposurePolicy? = nil) throws {
         if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
         guard device.isExposureModeSupported(.continuousAutoExposure) else {
             throw CaptureFailure.message("此镜头不支持所需的自动曝光。")
         }
-        let limit = CMTime(value: 5, timescale: 1000)
-        guard CMTimeCompare(device.activeFormat.minExposureDuration, limit) <= 0 else {
-            throw CaptureFailure.message("此格式无法将曝光时间限制到 5 ms。")
-        }
+        let selected = policy ?? activeExposurePolicy
         device.exposureMode = .continuousAutoExposure
-        device.activeMaxExposureDuration = CMTimeMinimum(limit, device.activeFormat.maxExposureDuration)
+        if selected == .automatic {
+            // AVFoundation explicitly defines .invalid as restoring its per-format AE default.
+            device.activeMaxExposureDuration = .invalid
+        } else {
+            let limit = CMTime(value: 5, timescale: 1000)
+            guard CMTimeCompare(device.activeFormat.minExposureDuration, limit) <= 0 else {
+                throw CaptureFailure.message("此格式无法将曝光时间限制到 5 ms。")
+            }
+            device.activeMaxExposureDuration = CMTimeMinimum(limit, device.activeFormat.maxExposureDuration)
+        }
+    }
+
+    func selectExposurePolicy(_ policy: CaptureExposurePolicy) {
+        queue.async { [self] in
+            guard recorder == nil, !isFinishing, let device = cameraInput?.device else { return }
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                try applyRecordingControlsLocked(device, policy: policy)
+                activeExposurePolicy = policy
+                policy.save()
+                publish { $0.exposurePolicy = policy }
+                queue.asyncAfter(deadline: .now() + 1) { [weak self] in self?.writeConfigurationReport() }
+            } catch { publish { $0.message = error.localizedDescription } }
+        }
     }
 
     func selectLens(_ lens: CameraLens) {
@@ -259,19 +282,24 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         guard session.isRunning, !session.isInterrupted else { publish { $0.phase = .unavailable }; return }
         startMotion()
         if recorder == nil {
-            if let device = cameraInput?.device {
-                let report: [String: Any] = ["focus_mode": device.focusMode.rawValue,
-                    "continuous_autofocus": device.focusMode == .continuousAutoFocus,
-                    "max_exposure_seconds": device.activeMaxExposureDuration.seconds,
-                    "observed_exposure_seconds": device.exposureDuration.seconds,
-                    "system_clock_available": session.synchronizationClock != nil,
-                    "hardware_triggered_sync": false]
-                if let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]) {
-                    let url = Self.recordingsRoot.deletingLastPathComponent().appendingPathComponent("capture-configuration.json")
-                    try? data.write(to: url, options: .atomic)
-                }
-            }
+            writeConfigurationReport()
             publish { $0.phase = .ready }
+        }
+    }
+
+    private func writeConfigurationReport() {
+        guard let device = cameraInput?.device else { return }
+        let maximum = device.activeMaxExposureDuration.seconds
+        let report: [String: Any] = ["focus_mode": device.focusMode.rawValue,
+            "continuous_autofocus": device.focusMode == .continuousAutoFocus,
+            "exposure_policy": activeExposurePolicy.rawValue, "exposure_mode": device.exposureMode.rawValue,
+            "max_exposure_seconds": maximum.isFinite ? maximum as Any : NSNull(),
+            "observed_exposure_seconds": device.exposureDuration.seconds,
+            "system_clock_available": session.synchronizationClock != nil,
+            "hardware_triggered_sync": false, "updated_at": ISO8601DateFormatter().string(from: Date())]
+        if let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]) {
+            let url = Self.recordingsRoot.deletingLastPathComponent().appendingPathComponent("capture-configuration.json")
+            try? data.write(to: url, options: .atomic)
         }
     }
 
@@ -295,7 +323,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
                     defer { device.unlockForConfiguration() }
                     try applyRecordingControlsLocked(device)
                 }
-                let recording = try RecordingWriter(root: Self.recordingsRoot, device: device, connection: connection, rotationDegrees: recordingRotationDegrees)
+                let recording = try RecordingWriter(root: Self.recordingsRoot, device: device, connection: connection, rotationDegrees: recordingRotationDegrees, exposurePolicy: activeExposurePolicy.rawValue)
                 recorder = recording
                 acceptsMotion = true
                 for kind in ["gyro", "accelerometer", "gravity"] {

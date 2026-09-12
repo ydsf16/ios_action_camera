@@ -70,6 +70,7 @@ public struct RecordingManifest: Codable {
     public var angularVelocityUnit = "rad/s"
     public var gravityReferenceFrame = "xArbitraryZVertical"
     // Optional fields preserve decoding of existing recording packages.
+    public var exposurePolicy: String?
     public var maximumAutoExposureSeconds: Double?
     public var continuousAutoFocusEnabled: Bool?
     public var systemTimestampSynchronizationEnabled: Bool?

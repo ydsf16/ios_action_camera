@@ -54,3 +54,21 @@ MC_日期_时间_随机ID/
 - 前台相机就绪后，将配置读回值写入 Documents/capture-configuration.json，供真机验证。
 
 官方说明：[自动曝光上限](https://developer.apple.com/documentation/avfoundation/avcapturedevice/activemaxexposureduration)、[采集同步时钟](https://developer.apple.com/documentation/avfoundation/avcapturesession/synchronizationclock)。
+
+## Exposure policy (0.4.1)
+
+`exposurePolicy` is an optional manifest field: `motion` retains continuous AE with
+an explicit 5 ms maximum; `automatic` restores AVFoundation's format-specific AE
+maximum with `activeMaxExposureDuration = .invalid`. The latter lets the system
+choose exposure and ISO for indoor lighting and can exceed 5 ms. It does not force
+10 ms or claim universal LED/PWM flicker suppression. The earlier 5 ms default is
+preserved until the user selects a different policy; selection persists and applies
+to preview and recording, including lens changes. Configuration is locked while
+recording. The actual finite AE maximum remains in `maximumAutoExposureSeconds`;
+per-frame observed duration/ISO remain in frames.csv. Timestamp mapping is unchanged.
+
+The settings page now displays the installed bundle version. CameraPreview updates
+rotation/stabilization only when changed, and does not subscribe to processing-job
+progress. These guard against redundant preview reconfiguration; the user's elevator
+lighting symptom is specifically addressed through the exposure policy, not claimed
+resolved by UI changes alone.
