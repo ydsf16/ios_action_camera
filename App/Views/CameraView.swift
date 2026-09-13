@@ -14,7 +14,7 @@ struct CameraView: View {
 
     var body: some View {
         ZStack {
-            CameraPreview(session: camera.session, rotationChanged: camera.setRecordingRotation)
+            CameraPreview(session: camera.session, device: camera.previewDevice, rotationChanged: camera.setCameraRotation)
                 .ignoresSafeArea()
                 .gesture(MagnifyGesture().onChanged { value in
                     guard camera.phase == .ready || recording else { return }
@@ -96,13 +96,6 @@ struct CameraView: View {
                         Spacer()
                         Button {
                             if recording { camera.stopRecording() } else {
-                                switch UIDevice.current.orientation {
-                                case .portrait: camera.setRecordingRotation(90)
-                                case .portraitUpsideDown: camera.setRecordingRotation(270)
-                                case .landscapeLeft: camera.setRecordingRotation(0)
-                                case .landscapeRight: camera.setRecordingRotation(180)
-                                default: break // Flat/unknown keeps the current preview orientation.
-                                }
                                 camera.startRecording()
                             }
                         } label: {
@@ -133,8 +126,6 @@ struct CameraView: View {
         .alert("拍摄提示", isPresented: Binding(get: { camera.message != nil }, set: { if !$0 { camera.message = nil } })) {
             Button("知道了", role: .cancel) { camera.message = nil }
         } message: { Text(camera.message ?? "") }
-        .onAppear { UIDevice.current.beginGeneratingDeviceOrientationNotifications() }
-        .onDisappear { UIDevice.current.endGeneratingDeviceOrientationNotifications() }
         .task {
             #if DEBUG
             // Device regression runner uses the same queue and exporter as the UI.
@@ -176,34 +167,62 @@ struct CameraView: View {
 
 private struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
-    var rotationChanged: (Int) -> Void
+    let device: AVCaptureDevice?
+    var rotationChanged: (Double, Double, String) -> Void
     class PreviewView: UIView {
-        var rotationChanged: ((Int) -> Void)?
-        private var reportedAngle: Int?
+        var rotationChanged: ((Double, Double, String) -> Void)?
+        private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
+        private var previewObservation: NSKeyValueObservation?
+        private var captureObservation: NSKeyValueObservation?
+        private var reportedCaptureAngle: CGFloat?
+        private var reportedPreviewAngle: CGFloat?
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
         var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+        func configure(device: AVCaptureDevice?) {
+            guard rotationCoordinator?.device !== device else { updateOrientation(); return }
+            previewObservation = nil; captureObservation = nil; rotationCoordinator = nil
+            reportedCaptureAngle = nil; reportedPreviewAngle = nil
+            guard let device else { return }
+            let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
+            rotationCoordinator = coordinator
+            // Apple delivers these notifications on main. Keep the preview and
+            // capture angles separate: they differ when the interface is locked.
+            previewObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.initial, .new]) { [weak self] _, _ in
+                self?.updateOrientation()
+            }
+            captureObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.initial, .new]) { [weak self] _, _ in
+                self?.updateOrientation()
+            }
+        }
+        func disconnect() {
+            previewObservation = nil; captureObservation = nil; rotationCoordinator = nil
+            rotationChanged = nil
+            previewLayer.session = nil
+        }
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            updateOrientation()
+        }
         override func layoutSubviews() {
             super.layoutSubviews()
             updateOrientation()
         }
         func updateOrientation() {
-            let angle: Int
-            switch window?.windowScene?.interfaceOrientation {
-            case .landscapeLeft: angle = 180
-            case .landscapeRight: angle = 0
-            case .portraitUpsideDown: angle = 270
-            default: angle = 90
-            }
-            if reportedAngle != angle {
-                reportedAngle = angle
-                rotationChanged?(angle)
+            guard let coordinator = rotationCoordinator, let device = coordinator.device else { return }
+            let angle = coordinator.videoRotationAngleForHorizonLevelPreview
+            // A detached preview layer reports zero; apply it once the view is visible.
+            guard window != nil else { return }
+            let captureAngle = coordinator.videoRotationAngleForHorizonLevelCapture
+            if reportedCaptureAngle != captureAngle || reportedPreviewAngle != angle {
+                reportedCaptureAngle = captureAngle; reportedPreviewAngle = angle
+                rotationChanged?(Double(captureAngle), Double(angle), device.uniqueID)
             }
             guard let connection = previewLayer.connection else { return }
             // SwiftUI progress/timer updates must not reconfigure an unchanged camera connection.
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            if connection.videoRotationAngle != CGFloat(angle), connection.isVideoRotationAngleSupported(CGFloat(angle)) {
-                connection.videoRotationAngle = CGFloat(angle)
+            if connection.videoRotationAngle != angle, connection.isVideoRotationAngleSupported(angle) {
+                connection.videoRotationAngle = angle
             }
             if connection.isVideoStabilizationSupported, connection.preferredVideoStabilizationMode != .off {
                 connection.preferredVideoStabilizationMode = .off
@@ -216,11 +235,15 @@ private struct CameraPreview: UIViewRepresentable {
         view.rotationChanged = rotationChanged
         view.previewLayer.session = session
         view.previewLayer.videoGravity = .resizeAspectFill
+        view.configure(device: device)
         return view
     }
     func updateUIView(_ view: PreviewView, context: Context) {
         view.rotationChanged = rotationChanged
-        view.updateOrientation()
+        view.configure(device: device)
+    }
+    static func dismantleUIView(_ view: PreviewView, coordinator: ()) {
+        view.disconnect()
     }
 }
 

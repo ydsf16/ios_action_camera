@@ -24,7 +24,7 @@ public struct CaptureFormat: Equatable, Hashable, Codable, Identifiable {
     public var id: String { "\(resolution.rawValue)-\(fps)" }
     public var label: String { "\(resolution.label) · \(fps)" }
     public static let frameRates = [24, 30, 60]
-    public static let standard = Self(resolution: .uhd4K, fps: 30)
+    public static let standard = Self(resolution: .uhd4K, fps: 60)
     public static let candidates = CaptureResolution.allCases.flatMap { resolution in
         frameRates.map { Self(resolution: resolution, fps: $0) }
     }

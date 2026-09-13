@@ -97,7 +97,8 @@ may require another duration. See [Sony's shutter recommendations](https://www.s
   only; resolution changes choose the closest supported frame rate when needed.
   Lens changes retain the requested frame rate if possible, otherwise choose a
   supported fallback and report it. Successful choices persist; existing installs
-  without preferences start at 4K30 when supported.
+  without preferences start at 4K60 when supported. The default exposure policy
+  remains `motion` (5 ms maximum, with automatic exposure and ISO).
 - Format changes run on the capture queue inside a session configuration transaction,
   with recording disabled. Both frame-duration bounds are set to 1/fps; automatic
   frame-rate changes are disabled on supported iOS 18+ formats. Exposure policy,
@@ -109,6 +110,7 @@ may require another duration. See [Sony's shutter recommendations](https://www.s
   size and fps; actual dropped frames remain visible in `drops.csv` and the manifest.
 - Stabilized output keeps source timestamps/fps. `exportResolution` independently
   selects `fullHD` (1920×1080) or `action2_8K` (2816×1584), capped at the source size.
+  Fresh defaults select `action2_8K`; previously saved preferences remain in effect.
   Old options without the field retain their original smoothing/crop settings and
   default to 1080p. Legacy 720p clips remain importable, but 720p is no longer offered
   for recording; saved 720p recording preferences migrate to 1080p at the same fps.

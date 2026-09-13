@@ -23,6 +23,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     @Published private(set) var lenses: [CameraLens] = []
     @Published private(set) var selectedLens = ""
     @Published private(set) var usesVirtualCamera = false
+    @Published private(set) var previewDevice: AVCaptureDevice?
     @Published private(set) var zoom = 1.0
     @Published private(set) var zoomRange = CaptureZoom(multiplier: 1, minimumDeviceZoom: 1, maximumDeviceZoom: 1, nativeDeviceZooms: [])
     @Published private(set) var activeLensLabel = ""
@@ -61,10 +62,18 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     private var acceptsMotion = false
     private var configured = false
     private var wantsActive = false
-    private var recordingRotationDegrees = 90
-    func setRecordingRotation(_ degrees: Int) {
-        guard [0, 90, 180, 270].contains(degrees) else { return }
-        queue.async { self.recordingRotationDegrees = degrees }
+    private var recordingRotationDegrees: Int?
+    private var previewRotationDegrees: Double?
+    func setCameraRotation(capture: Double, preview: Double, deviceID: String) {
+        guard let degrees = RecordingRotation.quarterTurn(from: capture), preview.isFinite else { return }
+        queue.async { [self] in
+            // Discard delayed callbacks from a previous physical/virtual input.
+            guard cameraInput?.device.uniqueID == deviceID else { return }
+            guard recordingRotationDegrees != degrees || previewRotationDegrees != preview else { return }
+            recordingRotationDegrees = degrees
+            previewRotationDegrees = preview
+            writeConfigurationReport()
+        }
     }
     private var histories = ["gyro": SampleHistory(), "accelerometer": SampleHistory(), "gravity": SampleHistory()]
     private var latestMotionTime: [String: Double] = [:]
@@ -210,12 +219,15 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
                 throw CaptureFailure.message("此虚拟相机格式不支持逐帧内参，无法用于稳定处理。")
             }
             let changed = selected != activeCaptureFormat
+            recordingRotationDegrees = nil
+            previewRotationDegrees = nil
             activeCaptureFormat = selected; formatChoices = choices
             selected.save()
             let focus = device.focusMode == .continuousAutoFocus ? "连续自动对焦" : "此镜头为固定对焦"
             publish {
                 $0.focusLabel = focus; $0.selectedLens = lens.id; $0.selectedFormat = selected
                 $0.usesVirtualCamera = device.isVirtualDevice
+                $0.previewDevice = device
                 $0.availableFormats = CaptureFormat.candidates.filter { choices[$0] != nil }
                 if changed { $0.message = "此镜头已使用支持的格式：\(selected.label) fps。" }
             }
@@ -330,7 +342,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
                 cameraInput = nil; configured = false
                 session.commitConfiguration()
                 stopMotion()
-                publish { $0.phase = .unavailable; $0.message = "恢复相机配置失败，请重新进入应用。" }
+                publish { $0.previewDevice = nil; $0.phase = .unavailable; $0.message = "恢复相机配置失败，请重新进入应用。" }
                 return
             }
             publish { $0.message = failure.localizedDescription }
@@ -478,6 +490,9 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
             "intrinsics_delivery_enabled": videoOutput.connection(with: .video)?.isCameraIntrinsicMatrixDeliveryEnabled ?? false,
             "stabilization_active": videoOutput.connection(with: .video)?.activeVideoStabilizationMode.rawValue ?? -1,
             "width": size.width, "height": size.height, "requested_fps": activeCaptureFormat.fps,
+            "orientation_source": "AVCaptureDevice.RotationCoordinator",
+            "capture_rotation_degrees": recordingRotationDegrees as Any? ?? NSNull(),
+            "preview_rotation_degrees": previewRotationDegrees as Any? ?? NSNull(),
             "min_frame_duration_seconds": device.activeVideoMinFrameDuration.seconds,
             "max_frame_duration_seconds": device.activeVideoMaxFrameDuration.seconds,
             "available_formats": CaptureFormat.candidates.filter { formatChoices[$0] != nil }.map {
@@ -501,6 +516,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
             guard wantsActive, session.isRunning, !session.isInterrupted, recorder == nil, !isFinishing,
                   let device = cameraInput?.device, let connection = videoOutput.connection(with: .video) else { return }
             do {
+                guard let recordingRotationDegrees else { throw CaptureFailure.message("正在确定拍摄方向，请稍后重试。") }
                 guard ProcessInfo.processInfo.thermalState != .critical else { throw CaptureFailure.message("设备温度过高，请稍后再录制。") }
                 try checkDisk(minimum: 500_000_000)
                 let now = CMClockGetTime(CMClockGetHostTimeClock()).seconds

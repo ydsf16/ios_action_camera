@@ -1,5 +1,15 @@
 import Foundation
 
+/// Movie orientation is a quarter turn, fixed when recording starts. The angle
+/// comes from AVCaptureDevice.RotationCoordinator, independently of interface orientation.
+public enum RecordingRotation {
+    public static func quarterTurn(from degrees: Double) -> Int? {
+        guard degrees.isFinite else { return nil }
+        let normalized = (degrees.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
+        return (Int((normalized / 90).rounded()) % 4) * 90
+    }
+}
+
 public struct MediaTime: Codable, Equatable, Sendable {
     public let value: Int64
     public let timescale: Int32

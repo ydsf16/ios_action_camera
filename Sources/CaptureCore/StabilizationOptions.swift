@@ -12,7 +12,7 @@ public struct StabilizationOptions: Codable, Equatable, Sendable {
     public var maxCrop: Double = 2.0
     public var dynamicCrop: Bool = true
     public var allowBlackBorders: Bool = false
-    public var exportResolution: ExportResolution = .fullHD
+    public var exportResolution: ExportResolution = .action2_8K
     public init() {}
     private enum CodingKeys: String, CodingKey {
         case strength, maxCrop, dynamicCrop, allowBlackBorders, exportResolution
