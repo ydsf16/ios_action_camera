@@ -138,6 +138,7 @@ struct CameraView: View {
             #if DEBUG
             // Device regression runner uses the same queue and exporter as the UI.
             let args = ProcessInfo.processInfo.arguments
+            if args.contains("--keep-awake-for-validation") { UIApplication.shared.isIdleTimerDisabled = true }
             if let index = args.firstIndex(of: "--stabilize-recording"), index + 1 < args.count {
                 let name = args[index + 1]
                 if (name.hasPrefix("RS_") || name.hasPrefix("MC_")), !name.contains("/"), !name.contains("..") {
@@ -151,6 +152,10 @@ struct CameraView: View {
             await camera.prepare()
             #if DEBUG
             if args.contains("--focus-controls-test") { await camera.validateFocusControls() }
+            if let index = args.firstIndex(of: "--recording-validation-seconds"), index + 1 < args.count,
+               let seconds = Double(args[index + 1]), seconds.isFinite, (5...30).contains(seconds) {
+                await camera.validateRecording(seconds: seconds)
+            }
             #endif
         }
         .onChange(of: scenePhase) { _, value in

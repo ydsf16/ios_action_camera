@@ -50,6 +50,8 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     @Published private(set) var permissionDenied = false
 
     private let queue = DispatchQueue(label: "com.grape.RoamShot.capture", qos: .userInitiated)
+    private let storageQueue = DispatchQueue(label: "com.grape.RoamShot.storage-check", qos: .utility)
+    private var storageCheckPending = false // capture queue only
     private let motion = CMMotionManager()
     private lazy var motionQueue: OperationQueue = {
         let value = OperationQueue()
@@ -796,7 +798,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
                     lastUIPublish = now
                 }
                 if now - lastDiskCheck > 2 {
-                    try checkDisk(minimum: 100_000_000); lastDiskCheck = now
+                    checkStorageInBackground(for: recording); lastDiskCheck = now
                     if ProcessInfo.processInfo.thermalState == .critical { throw CaptureFailure.message("设备温度过高，录制已停止。") }
                     guard ["gyro", "accelerometer", "gravity"].allSatisfy({ now - (latestMotionTime[$0] ?? 0) < 1 }) else {
                         throw CaptureFailure.message("运动数据中断，录制已停止。")
@@ -816,6 +818,49 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     }
 
     #if DEBUG
+    /// Explicit device-test launch only; uses the same controls, entitlement limit,
+    /// writer, telemetry and stop path as a manual recording. No Release entry point.
+    @MainActor func validateRecording(seconds: Double) async {
+        let url = Self.recordingsRoot.deletingLastPathComponent().appendingPathComponent("recording-validation.json")
+        var result: [String: Any] = ["passed": false, "requested_seconds": seconds]
+        do {
+            for _ in 0..<100 {
+                if phase == .ready { break }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard phase == .ready, selectedFormat == .standard else { throw InputError("验证需要就绪的 4K/60 相机。") }
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+            startRecording()
+            for _ in 0..<100 {
+                if phase == .recording { break }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard phase == .recording else { throw InputError(message ?? "录制未启动。") }
+            let deadline = Date().addingTimeInterval(seconds + 10)
+            while phase == .recording, duration < seconds, Date() < deadline {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard phase == .recording, duration >= seconds else { throw InputError(message ?? "录制提前结束。") }
+            stopRecording()
+            for _ in 0..<100 {
+                if let directory = latestDirectory {
+                    result["directory"] = directory.lastPathComponent
+                    result["passed"] = true
+                    break
+                }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            if result["directory"] == nil { throw InputError(message ?? "录制未完成封装。") }
+        } catch {
+            if phase == .recording { stopRecording() }
+            result["error"] = error.localizedDescription
+        }
+        result["completed_at"] = ISO8601DateFormatter().string(from: Date())
+        if let data = try? JSONSerialization.data(withJSONObject: result, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
     private struct FocusCheckSnapshot: Sendable {
         let deviceID: String
         let mode: Int
@@ -886,9 +931,29 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
 
     private func checkDisk(minimum: Int64) throws {
         try FileManager.default.createDirectory(at: Self.recordingsRoot, withIntermediateDirectories: true)
+        try Self.checkAvailableStorage(minimum: minimum)
+    }
+
+    private static func checkAvailableStorage(minimum: Int64) throws {
         let values = try Self.recordingsRoot.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
         if let bytes = values.volumeAvailableCapacityForImportantUsage, bytes < minimum {
             throw CaptureFailure.message("可用空间不足，请清理存储后再录制。已有素材会保留。")
+        }
+    }
+
+    /// Capacity queries can exceed a 60 fps frame interval. Keep file-system work
+    /// off the queue that delivers video/audio and the original CoreMotion samples.
+    private func checkStorageInBackground(for recording: RecordingWriter) {
+        guard !storageCheckPending else { return }
+        storageCheckPending = true
+        storageQueue.async { [self, weak recording] in
+            let result = Result { try Self.checkAvailableStorage(minimum: 100_000_000) }
+            queue.async { [self, weak recording] in
+                storageCheckPending = false
+                // A late result must not stop a different or already-finalizing clip.
+                guard let recording, recorder === recording, !isFinishing else { return }
+                if case let .failure(error) = result { fail(error) }
+            }
         }
     }
 

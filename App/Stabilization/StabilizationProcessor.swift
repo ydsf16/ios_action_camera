@@ -71,8 +71,10 @@ enum StabilizationProcessor {
         var stageStarted = CFAbsoluteTimeGetCurrent()
         func measured(_ name: String) { let now = CFAbsoluteTimeGetCurrent(); timings[name, default: 0] += now-stageStarted; stageStarted = now }
         var legacy = false
+        var referenceSampling = false
         #if DEBUG
         legacy = ProcessInfo.processInfo.arguments.contains("--legacy-bgra")
+        referenceSampling = ProcessInfo.processInfo.arguments.contains("--reference-lanczos")
         #endif
         func mark(_ stage: String) {
             let state = ["stage": stage, "updated_at": ISO8601DateFormatter().string(from: Date())]
@@ -91,7 +93,7 @@ enum StabilizationProcessor {
         defer { roamshot_engine_destroy(engine) }
         let stabilizationReport = try report(engine)
         measured("pose_smoothing_crop_seconds")
-        let renderer = try legacy ? nil : MetalStabilizer()
+        let renderer = try legacy ? nil : MetalStabilizer(referenceSampling: referenceSampling)
         let pixelFormat = legacy ? kCVPixelFormatType_32BGRA : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         measured("metal_setup_seconds")
         mark("loading-video-track")
@@ -189,7 +191,10 @@ enum StabilizationProcessor {
             timings["gpu_wait_seconds", default: 0] += CFAbsoluteTimeGetCurrent()-start
             let encodeStart = CFAbsoluteTimeGetCurrent()
             try waitForInput(videoWriter)
+            let appendStart = CFAbsoluteTimeGetCurrent()
+            timings["encoder_readiness_wait_seconds", default: 0] += appendStart - encodeStart
             guard adaptor.append(next.frame.output, withPresentationTime: next.pts) else { throw writer.error ?? InputError("输出帧写入失败。") }
+            timings["encoder_append_seconds", default: 0] += CFAbsoluteTimeGetCurrent() - appendStart
             timings["encode_wait_append_seconds", default: 0] += CFAbsoluteTimeGetCurrent()-encodeStart
             rendered += 1
             if rendered % 15 == 0 { progress(Double(rendered)/Double(config.frames.count)*0.95) }
@@ -266,6 +271,7 @@ enum StabilizationProcessor {
             guard writer.status == .completed else { throw writer.error ?? InputError("稳定视频封装失败。") }
             measured("finish_audio_container_seconds")
             let receipt: [String:Any] = ["engine":"Gyroflow 1.6.3", "backend":legacy ? "Metal (wgpu BGRA benchmark)" : "Metal NV12 IOSurface", "timings":timings, "max_inflight_frames":legacy ? 1 : 3, "app_cpu_pixel_copies_per_frame":legacy ? 2 : 0, "interpolation":"Lanczos4", "processing_seconds":Date().timeIntervalSince(processingStarted), "options": try JSONSerialization.jsonObject(with: JSONEncoder().encode(options)), "input_frames":count,"output_width":config.output_width,
+                "sampling_kernel":renderer?.kernelName ?? "wgpu", "output_codec":AVVideoCodecType.h264.rawValue,
                 "output_height":config.output_height,"requested_fps":config.fps,"rolling_shutter":false,"horizon_lock":(stabilizationReport.effectiveHorizonPercent ?? 0) > 0,
                 "horizon_source":(stabilizationReport.effectiveHorizonPercent ?? 0) > 0 ? "CoreMotion.gravity" : "off", "gravity_samples":config.gravity.count,
                 "gravity_orientation":"native image axes = [-deviceY, -deviceX, -deviceZ]; horizon roll = -displayRotationDegrees",

@@ -6,7 +6,7 @@ constant float weights[256] = {// Lanczos4
     // offset 192
      0.000000,0.000000,0.000000,1.000000,0.000000,0.000000,0.000000,0.000000,-0.002981,0.009625,-0.027053,0.998265,0.029187,-0.010246,0.003264,-0.000062,-0.005661,0.018562,-0.051889,0.993077,0.060407,-0.021035,0.006789,-0.000250,-0.008027,0.026758,-0.074449,0.984478,0.093543,-0.032281,0.010545,-0.000567,-0.010071,0.034167,-0.094690,0.972534,0.128459,-0.043886,0.014499,-0.001012,-0.011792,0.040757,-0.112589,0.957333,0.165004,-0.055744,0.018613,-0.001582,-0.013191,0.046507,-0.128145,0.938985,0.203012,-0.067742,0.022845,-0.002271,-0.014275,0.051405,-0.141372,0.917621,0.242303,-0.079757,0.027146,-0.003071,-0.015054,0.055449,-0.152304,0.893389,0.282684,-0.091661,0.031468,-0.003971,-0.015544,0.058648,-0.160990,0.866453,0.323952,-0.103318,0.035754,-0.004956,-0.015761,0.061020,-0.167496,0.836995,0.365895,-0.114591,0.039949,-0.006011,-0.015727,0.062590,-0.171900,0.805208,0.408290,-0.125335,0.043992,-0.007117,-0.015463,0.063390,-0.174295,0.771299,0.450908,-0.135406,0.047823,-0.008254,-0.014995,0.063460,-0.174786,0.735484,0.493515,-0.144657,0.051378,-0.009399,-0.014349,0.062844,-0.173485,0.697987,0.535873,-0.152938,0.054595,-0.010527,-0.013551,0.061594,-0.170517,0.659039,0.577742,-0.160105,0.057411,-0.011613,-0.012630,0.059764,-0.166011,0.618877,0.618877,-0.166011,0.059764,-0.012630,-0.011613,0.057411,-0.160105,0.577742,0.659039,-0.170517,0.061594,-0.013551,-0.010527,0.054595,-0.152938,0.535873,0.697987,-0.173485,0.062844,-0.014349,-0.009399,0.051378,-0.144657,0.493515,0.735484,-0.174786,0.063460,-0.014995,-0.008254,0.047823,-0.135406,0.450908,0.771299,-0.174295,0.063390,-0.015463,-0.007117,0.043992,-0.125336,0.408290,0.805208,-0.171900,0.062590,-0.015727,-0.006011,0.039949,-0.114591,0.365895,0.836995,-0.167496,0.061020,-0.015761,-0.004956,0.035754,-0.103318,0.323952,0.866453,-0.160990,0.058648,-0.015544,-0.003971,0.031468,-0.091661,0.282684,0.893389,-0.152304,0.055449,-0.015054,-0.003071,0.027146,-0.079757,0.242303,0.917621,-0.141372,0.051405,-0.014275,-0.002271,0.022845,-0.067742,0.203012,0.938985,-0.128145,0.046507,-0.013191,-0.001582,0.018613,-0.055744,0.165004,0.957333,-0.112589,0.040757,-0.011792,-0.001012,0.014499,-0.043886,0.128459,0.972534,-0.094690,0.034167,-0.010071,-0.000567,0.010545,-0.032281,0.093543,0.984478,-0.074449,0.026758,-0.008027,-0.000250,0.006789,-0.021035,0.060407,0.993077,-0.051889,0.018562,-0.005661,-0.000062,0.003264,-0.010246,0.029187,0.998265,-0.027053,0.009625,-0.002981};
 struct Warp { float4 row0; float4 row1; float4 row2; float4 plane; };
-kernel void warpPlane(texture2d<float, access::read> src [[texture(0)]],
+kernel void warpPlaneReference(texture2d<float, access::read> src [[texture(0)]],
                       texture2d<float, access::write> dst [[texture(1)]],
                       constant Warp &p [[buffer(0)]], uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
@@ -20,6 +20,50 @@ kernel void warpPlane(texture2d<float, access::read> src [[texture(0)]],
     int2 base = q >> 5;
     int2 phase = (q & 31)*8;
     float4 sum = 0;
+    for (int y=0;y<8;++y) {
+        float4 row = 0;
+        for (int x=0;x<8;++x) {
+            int2 at = base + int2(x,y);
+            bool inside = all(at>=0) && at.x<int(src.get_width()) && at.y<int(src.get_height());
+            row += (inside ? src.read(uint2(at)) : bg)*weights[phase.x+x];
+        }
+        sum += row*weights[phase.y+y];
+    }
+    dst.write(clamp(sum,0.0,1.0),gid);
+}
+
+kernel void warpPlane(texture2d<float, access::sample> src [[texture(0)]],
+                      texture2d<float, access::write> dst [[texture(1)]],
+                      constant Warp &p [[buffer(0)]], uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
+    float3 xy = float3(float2(gid)*p.plane.x + p.plane.yz, 1.0);
+    float z = dot(p.row2.xyz, xy);
+    float4 bg = p.plane.x == 1.0 ? float4(16.0/255.0,0,0,1) : float4(128.0/255.0,128.0/255.0,0,1);
+    if (z <= 0.0) { dst.write(bg,gid); return; }
+    float2 uv = (float2(dot(p.row0.xyz,xy),dot(p.row1.xyz,xy))/z-p.plane.yz)/p.plane.x;
+    if (!all(isfinite(uv)) || any(abs(uv)>float2(100000))) { dst.write(bg,gid); return; }
+    int2 q = int2(round((uv-3.0)*32.0));
+    int2 base = q >> 5;
+    int2 phase = (q & 31)*8;
+    float4 sum = 0;
+    // Texture gather packs a 2x2 footprint. The interior path has no tap bounds checks.
+    if (all(base >= 0) && base.x + 7 < int(src.get_width()) && base.y + 7 < int(src.get_height())) {
+        constexpr sampler taps(coord::pixel, address::clamp_to_edge, filter::nearest);
+        float2 value = 0;
+        for (int y = 0; y < 8; y += 2) {
+            float2 row0 = 0, row1 = 0;
+            for (int x = 0; x < 8; x += 2) {
+                float2 at = float2(base + int2(x+1,y+1));
+                float4 r = src.gather(taps, at, int2(0), component::x);
+                float4 g = p.plane.x == 1.0 ? float4(0) : src.gather(taps, at, int2(0), component::y);
+                row0 += float2(r.w,g.w)*weights[phase.x+x] + float2(r.z,g.z)*weights[phase.x+x+1];
+                row1 += float2(r.x,g.x)*weights[phase.x+x] + float2(r.y,g.y)*weights[phase.x+x+1];
+            }
+            value += row0*weights[phase.y+y] + row1*weights[phase.y+y+1];
+        }
+        dst.write(clamp(float4(value,0,1),0.0,1.0),gid);
+        return;
+    }
     for (int y=0;y<8;++y) {
         float4 row = 0;
         for (int x=0;x<8;++x) {

@@ -32,3 +32,12 @@
 - Build 27 uploaded and completed App Store Connect processing. Version 1.0.0 now references build 27. Six screenshots and the new direct-recording review notes were saved and read back. App 1.0.0 (27) and RoamShot Pro Lifetime are in the same review draft with two prepared items. The final submission button was not clicked.
 - Camera and 2× images show production SwiftUI controls over an AI-generated coastal illustration. The image input is compiled only for Debug simulators and is absent from the signed iOS archive. The updated upgrade screenshot comes from the build 27 settings view with local StoreKit price ¥20.
 - Build 26 was installed and its live phone viewfinder was observed before the user's request to remove purchase prompts. That observation does not validate build 27's minute-long recording lifecycle or real stabilization quality.
+
+## Build 32 release preparation — 2026-09-14
+
+- The user authorized pushing the current changes and uploading/submitting the updated build after the matched performance and hardware-encoder checks. This supersedes the earlier publishing pause and reserved final-action instruction for this release.
+- Version 1.0.1 (32), bundle com.grape.RoamShot, minimum iOS 17.0. The iOS 16 experiment is excluded. Defaults remain 4K60 capture, 5 ms exposure cap and 2.8K output.
+- Signed Release archive succeeded; archive identity and Mach-O linkage checks passed. No recovery helper, local StoreKit configuration or simulator scenery fixture is packaged.
+- CaptureCore: 28 tests passed, zero failures. The Gyroflow working tree matches the pinned revision plus both published patches, ignoring formatting-only differences.
+- Same-phone build comparisons, exact decoded pixels, preserved video/audio timestamps, 4K60 capture checks and actual AppleAVE hardware H.264 encoding are documented in ../performance-build29.md.
+- Live App Store Connect initially showed version 1.0.0 (27) waiting for review, with the correct six screenshots, Chinese copy and lifetime IAP. New upload and replacement submission are pending at this preparation point.

@@ -9,7 +9,7 @@ import CoreVideo
         for (width, height) in [(1280, 720), (3840, 2160)] {
             try autoreleasepool { try verify(width: width, height: height) }
         }
-        print("Capture Metal copy passed: exact Y/UV, original PTS/duration/attachments, 8-buffer bound and reuse")
+        print("Capture Metal copy passed: exact Y/UV, original PTS/duration/attachments, bounded pool and reuse")
     }
     static func verify(width: Int, height: Int) throws {
         var source: CVPixelBuffer?

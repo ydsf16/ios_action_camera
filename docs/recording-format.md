@@ -3,7 +3,7 @@
 ```text
 RS_日期_时间_随机ID/
   manifest.json       配置、时间原点、状态、计数和警告
-  video.mov           H.264 + AAC；正常封装完成后才使用此文件名
+  video.mov           HEVC 或 H.264 + AAC；实际编码见 manifest.videoCodec
   frames.csv          每个成功写入的视频帧
   audio.csv           每个成功写入的音频缓冲区
   gyro.csv            原始角速度 rad/s
@@ -13,6 +13,8 @@ RS_日期_时间_随机ID/
 ```
 
 录制过程中视频名为 `video.partial.mov`。`manifest.status` 为 `recording`、`complete` 或 `failed`。异常时保留现有文件供诊断；进程被强制终止时，未封装视频不保证可播放，缓存中的最后部分遥测数据也可能尚未写入。不得把保留文件等同于恢复成功。
+
+4K60 原片优先使用系统 HEVC 编码，不支持时回退 H.264；其他采集模式和稳定输出保持 H.264。60 fps 录制另附 `capture-performance.json`，记录有界缓存池容量、复制耗时和池耗尽次数。
 
 ## 时间
 

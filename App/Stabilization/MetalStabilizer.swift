@@ -24,11 +24,13 @@ final class MetalStabilizer {
     let device: MTLDevice
     private let queue: MTLCommandQueue
     private let pipeline: MTLComputePipelineState
+    let kernelName: String
     private var cache: CVMetalTextureCache
-    init(library: MTLLibrary? = nil) throws {
+    init(library: MTLLibrary? = nil, referenceSampling: Bool = false) throws {
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { throw InputError("Metal 不可用。") }
         self.device = device; self.queue = queue
-        guard let function = (library ?? device.makeDefaultLibrary())?.makeFunction(name: "warpPlane") else { throw InputError("找不到稳定着色器。") }
+        kernelName = referenceSampling ? "warpPlaneReference" : "warpPlane"
+        guard let function = (library ?? device.makeDefaultLibrary())?.makeFunction(name: kernelName) else { throw InputError("找不到稳定着色器。") }
         pipeline = try device.makeComputePipelineState(function: function)
         var cache: CVMetalTextureCache?
         guard CVMetalTextureCacheCreate(nil, nil, device, nil, &cache) == kCVReturnSuccess, let cache else { throw InputError("无法创建 Metal 纹理缓存。") }

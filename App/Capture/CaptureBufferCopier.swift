@@ -7,7 +7,14 @@ import Foundation
 /// runs dry. A bounded IOSurface pool decouples their lifetimes with a Metal blit.
 /// No CPU pixel access, color conversion or timestamp changes occur here.
 final class CaptureBufferCopier {
-    static let capacity = 8
+    // Reserve headroom for encoder retention at 4K60. Codec selection separately
+    // addresses sustained throughput; extra buffers alone cannot fix that. Bound
+    // to about 190 MiB of NV12 image data at 4K (plus platform stride/metadata).
+    static let capacity = 16
+    private(set) var copiedFrames = 0
+    private(set) var poolFullDrops = 0
+    private(set) var copySeconds = 0.0
+    private(set) var maximumCopySeconds = 0.0
     private let pool: CVPixelBufferPool
     private let queue: MTLCommandQueue
     private let cache: CVMetalTextureCache
@@ -36,14 +43,26 @@ final class CaptureBufferCopier {
 
     /// nil means bounded backpressure; the caller records the dropped source PTS.
     func copy(_ sample: CMSampleBuffer) throws -> CMSampleBuffer? {
+        let began = CFAbsoluteTimeGetCurrent()
+        defer {
+            let elapsed = CFAbsoluteTimeGetCurrent() - began
+            copySeconds += elapsed
+            maximumCopySeconds = max(maximumCopySeconds, elapsed)
+        }
         guard let source = CMSampleBufferGetImageBuffer(sample),
               let description = CMSampleBufferGetFormatDescription(sample),
               CVPixelBufferGetPixelFormatType(source) == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
               CVPixelBufferGetPlaneCount(source) == 2 else { throw InputError("录制缓存格式不匹配。") }
         var output: CVPixelBuffer?
-        let status = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(nil, pool,
-            [kCVPixelBufferPoolAllocationThresholdKey as String: Self.capacity] as CFDictionary, &output)
-        if status == kCVReturnWouldExceedAllocationThreshold { return nil }
+        let limit = [kCVPixelBufferPoolAllocationThresholdKey as String: Self.capacity] as CFDictionary
+        var status = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(nil, pool, limit, &output)
+        if status == kCVReturnWouldExceedAllocationThreshold {
+            // Evict unused texture wrappers before deciding that the encoder
+            // still owns the whole pool. Do not increase the allocation limit.
+            CVMetalTextureCacheFlush(cache, 0)
+            status = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(nil, pool, limit, &output)
+        }
+        if status == kCVReturnWouldExceedAllocationThreshold { poolFullDrops += 1; return nil }
         guard status == kCVReturnSuccess, let output else { throw InputError("无法分配录制缓存：\(status)") }
         guard CVPixelBufferGetWidth(source) == CVPixelBufferGetWidth(output),
               CVPixelBufferGetHeight(source) == CVPixelBufferGetHeight(output) else { throw InputError("录制过程中图像尺寸发生变化。") }
@@ -62,6 +81,7 @@ final class CaptureBufferCopier {
             throw InputError("无法封装录制帧。")
         }
         CMPropagateAttachments(sample, destination: result)
+        copiedFrames += 1
         return result
     }
 

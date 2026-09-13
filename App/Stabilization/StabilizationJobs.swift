@@ -32,7 +32,11 @@ final class StabilizationJobs: ObservableObject {
     }
     private func updateIdleTimer() {
         #if canImport(UIKit)
-        UIApplication.shared.isIdleTimerDisabled = foreground && (recording || active != nil || !pending.isEmpty)
+        var validation = false
+        #if DEBUG
+        validation = ProcessInfo.processInfo.arguments.contains("--keep-awake-for-validation")
+        #endif
+        UIApplication.shared.isIdleTimerDisabled = foreground && (validation || recording || active != nil || !pending.isEmpty)
         #endif
     }
     func setRecording(_ value: Bool) { recording = value; control?.pause(value); if !value { next() }; updateIdleTimer() }

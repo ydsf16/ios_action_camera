@@ -61,7 +61,7 @@ final class RecordingWriter {
         manifest.requestedFPS = captureFormat.fps
         manifest.recordingLimitSeconds = maximumDuration
         manifest.appBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
-        manifest.captureBufferStrategy = captureFormat.fps >= 60 ? "metal_nv12_owned_pool_8" : "camera_buffers_direct"
+        manifest.captureBufferStrategy = captureFormat.fps >= 60 ? "metal_nv12_owned_pool_\(CaptureBufferCopier.capacity)" : "camera_buffers_direct"
         let maximumExposure = device.activeMaxExposureDuration.seconds
         manifest.maximumAutoExposureSeconds = maximumExposure.isFinite ? maximumExposure : nil
         manifest.exposurePolicy = exposurePolicy
@@ -107,11 +107,21 @@ final class RecordingWriter {
         if manifest.requestedFPS >= 60 { captureBufferCopier = try CaptureBufferCopier(width: width, height: height) }
         let writer = try AVAssetWriter(outputURL: directory.appendingPathComponent("video.partial.mov"), fileType: .mov)
         writer.movieTimeScale = 1_000_000
-        let settings: [String: Any] = [AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: width, AVVideoHeightKey: height,
-            AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: CaptureFormat.videoBitRate(width: width, height: height, fps: manifest.requestedFPS),
-                AVVideoExpectedSourceFrameRateKey: manifest.requestedFPS, AVVideoAllowFrameReorderingKey: false,
-                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel]]
+        func settings(for codec: AVVideoCodecType) -> [String: Any] {
+            var compression: [String: Any] = [
+                AVVideoAverageBitRateKey: CaptureFormat.videoBitRate(width: width, height: height, fps: manifest.requestedFPS),
+                AVVideoExpectedSourceFrameRateKey: manifest.requestedFPS, AVVideoAllowFrameReorderingKey: false]
+            if codec == .h264 { compression[AVVideoProfileLevelKey] = AVVideoProfileLevelH264HighAutoLevel }
+            return [AVVideoCodecKey: codec, AVVideoWidthKey: width, AVVideoHeightKey: height,
+                    AVVideoCompressionPropertiesKey: compression]
+        }
+        // Prefer the system's HEVC encoder for 4K60. H.264 could consume only
+        // about 48 frames/s in the observed phone pipeline, filling any finite pool.
+        let preferHEVC = width >= 3840 && manifest.requestedFPS >= 60
+        var codec: AVVideoCodecType = preferHEVC ? .hevc : .h264
+        if !writer.canApply(outputSettings: settings(for: codec), forMediaType: .video) { codec = .h264 }
+        let settings = settings(for: codec)
+        manifest.videoCodec = codec == .hevc ? "hevc" : "h264"
         let video = AVAssetWriterInput(mediaType: .video, outputSettings: settings,
                                       sourceFormatHint: CMSampleBufferGetFormatDescription(sample))
         video.expectsMediaDataInRealTime = true
@@ -232,6 +242,15 @@ final class RecordingWriter {
 
     private func finalize(error: String?, completion: (Result<URL, Error>) -> Void) {
         do {
+            if let copier = captureBufferCopier {
+                let diagnostics: [String: Any] = ["pool_capacity": CaptureBufferCopier.capacity,
+                    "copied_frames": copier.copiedFrames, "pool_full_drops": copier.poolFullDrops,
+                    "copy_seconds": copier.copySeconds, "maximum_copy_seconds": copier.maximumCopySeconds]
+                // Optional diagnostics must not turn a successfully recorded movie into a failure.
+                if let data = try? JSONSerialization.data(withJSONObject: diagnostics, options: [.prettyPrinted, .sortedKeys]) {
+                    try? data.write(to: directory.appendingPathComponent("capture-performance.json"), options: .atomic)
+                }
+            }
             if assetWriter?.status == .completed {
                 try FileManager.default.moveItem(at: directory.appendingPathComponent("video.partial.mov"),
                                                 to: directory.appendingPathComponent("video.mov"))
