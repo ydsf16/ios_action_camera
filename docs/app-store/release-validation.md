@@ -41,3 +41,11 @@
 - CaptureCore: 28 tests passed, zero failures. The Gyroflow working tree matches the pinned revision plus both published patches, ignoring formatting-only differences.
 - Same-phone build comparisons, exact decoded pixels, preserved video/audio timestamps, 4K60 capture checks and actual AppleAVE hardware H.264 encoding are documented in ../performance-build29.md.
 - Live App Store Connect initially showed version 1.0.0 (27) waiting for review, with the correct six screenshots, Chinese copy and lifetime IAP. New upload and replacement submission are pending at this preparation point.
+
+## Build 32 submitted — 2026-09-14
+
+- Code commit `afd6e88c28daf47f40945043409c8b1ec86476f1` was pushed to `main` and `codex/orientation-stabilization-controls`, with source tag `v1.0.1-build.32`.
+- Xcode App Store Connect upload succeeded at 00:17 China Standard Time. Apple completed processing build 1.0.1 (32), ID `c9b8fc9b-54dc-41e8-ab59-99369fcdff7a`.
+- The earlier 1.0.0 (27) submission was withdrawn to replace its build. The version was updated to 1.0.1 and associated with build 32. The six screenshots, Chinese marketing copy, review instructions and automatic release setting were retained.
+- App 1.0.1 (32) and RoamShot Pro Lifetime were submitted together at 00:33 China Standard Time. Live App Store Connect showed both items **Waiting for Review**, submission ID `fc166f2e-b1f9-434d-87ac-386f8a11bd25`.
+- Submission is complete; Apple review approval and App Store availability remain pending. The historical outstanding StoreKit acceptance above is not implied to be completed by submission.
