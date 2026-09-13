@@ -93,6 +93,16 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
             .appendingPathComponent("Recordings", isDirectory: true)
     }
 
+    #if DEBUG && targetEnvironment(simulator)
+    // Marketing fixtures render the production controls over explicitly labeled sample media.
+    // This input and its state overrides are absent from device and Release builds.
+    let storeScreenshotImage: UIImage? = {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "--store-camera-image"), i + 1 < args.count else { return nil }
+        return UIImage(contentsOfFile: args[i + 1])
+    }()
+    #endif
+
     override init() {
         super.init()
         let center = NotificationCenter.default
@@ -116,6 +126,18 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
 
     func prepare() async {
+        #if DEBUG && targetEnvironment(simulator)
+        if storeScreenshotImage != nil {
+            await MainActor.run {
+                self.selectedFormat = .standard
+                self.usesVirtualCamera = true
+                self.zoomRange = CaptureZoom(multiplier: 0.5, minimumDeviceZoom: 1,
+                    maximumDeviceZoom: 10, nativeDeviceZooms: [2])
+                self.phase = .ready
+            }
+            return
+        }
+        #endif
         let videoAllowed = await Self.permission(.video)
         let audioAllowed = await Self.permission(.audio)
         guard videoAllowed, audioAllowed else {
@@ -143,6 +165,9 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     }
 
     func setActive(_ active: Bool) {
+        #if DEBUG && targetEnvironment(simulator)
+        if storeScreenshotImage != nil { return }
+        #endif
         if !active { beginFinishingTask() }
         queue.async { [self] in
             wantsActive = active
@@ -382,6 +407,12 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     /// Coalesce gesture updates on the capture queue; never stop/reconfigure the
     /// session or reset its clock while changing zoom during a recording.
     func setZoom(_ value: Double, smooth: Bool = false) {
+        #if DEBUG && targetEnvironment(simulator)
+        if storeScreenshotImage != nil {
+            publish { $0.zoom = $0.zoomRange.clamped(value) }
+            return
+        }
+        #endif
         guard value.isFinite else { return }
         queue.async { [self] in
             zoomRequest?.cancel()
@@ -682,10 +713,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
                 recorder = nil; isFinishing = false
                 if !wantsActive { stopMotion() }
                 switch result {
-                case let .success(directory): publish {
-                    $0.latestDirectory = directory
-                    if reason == "free_recording_limit" { $0.message = "已录满免费 1 分钟，视频已保存，将自动生成稳定视频。解锁 Pro 可连续录制更久。" }
-                }
+                case let .success(directory): publish { $0.latestDirectory = directory }
                 case let .failure(error): publish { $0.message = error.localizedDescription }
                 }
                 let nextPhase: CameraPhase = wantsActive && session.isRunning && !session.isInterrupted ? .ready : .unavailable

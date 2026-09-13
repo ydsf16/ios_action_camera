@@ -8,7 +8,7 @@ struct RoamShotApp: App {
             Group {
                 #if DEBUG && targetEnvironment(simulator)
                 if ProcessInfo.processInfo.arguments.contains("--commerce-tests") { Color.black }
-                else if ProcessInfo.processInfo.arguments.contains("--upgrade") { ProUpgradeView(freeRecording: {}) }
+                else if ProcessInfo.processInfo.arguments.contains("--upgrade") { ProUpgradeView() }
                 else if ProcessInfo.processInfo.arguments.contains("--settings") { NavigationStack { StabilizationSettingsView() } }
                 else if ProcessInfo.processInfo.arguments.contains("--library") { RecordingLibraryView() }
                 else { CameraView() }

@@ -7,7 +7,6 @@ struct CameraView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @ObservedObject private var access = ProAccess.shared
-    @State private var showRecordingUpgrade = false
     @State private var showLibrary = false
     @State private var showSettings = false
     @State private var pinchStartZoom: Double?
@@ -17,16 +16,17 @@ struct CameraView: View {
 
     var body: some View {
         ZStack {
-            CameraPreview(session: camera.session, device: camera.previewDevice,
-                gridEnabled: gridEnabled, interactionEnabled: camera.phase == .ready || recording,
-                focusFeedback: camera.focusFeedback, rotationChanged: camera.setCameraRotation,
-                focusRequested: camera.focus,
-                zoomChanged: { scale, ended in
-                    if ended { pinchStartZoom = nil; return }
-                    if pinchStartZoom == nil { pinchStartZoom = camera.zoom }
-                    camera.setZoom((pinchStartZoom ?? camera.zoom) * scale)
-                })
-                .ignoresSafeArea()
+            #if DEBUG && targetEnvironment(simulator)
+            if let image = camera.storeScreenshotImage {
+                GeometryReader { geometry in
+                    Image(uiImage: image).resizable().scaledToFill()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .scaleEffect(camera.zoom).clipped()
+                }.ignoresSafeArea()
+            } else { livePreview }
+            #else
+            livePreview
+            #endif
 
             // Subtle scrims keep controls readable without reserving space in the viewfinder.
             VStack(spacing: 0) {
@@ -90,8 +90,8 @@ struct CameraView: View {
                     }
                     if camera.zoomRange.maximum > camera.zoomRange.minimum { CameraZoomControls(camera: camera) }
 
-                    if !access.hasPro {
-                        Text(recording ? "免费录制 · \(max(0, 60 - Int(camera.duration))) 秒后自动保存" : "免费每段 1 分钟 · 解锁可录更久")
+                    if recording && !access.hasPro {
+                        Text("\(max(0, 60 - Int(camera.duration))) 秒后自动保存")
                             .font(.caption).foregroundStyle(.white.opacity(0.85))
                     }
                     Text(camera.phase == .finishing ? "正在保存…" : "视频")
@@ -105,9 +105,7 @@ struct CameraView: View {
                         }.accessibilityLabel("素材").disabled(recording || camera.phase == .finishing)
                         Spacer()
                         Button {
-                            if recording { camera.stopRecording() } else {
-                                if access.hasPro { camera.startRecording() } else { showRecordingUpgrade = true }
-                            }
+                            if recording { camera.stopRecording() } else { camera.startRecording() }
                         } label: {
                             ZStack {
                                 Circle().fill(.black.opacity(0.2)).frame(width: 78, height: 78)
@@ -131,9 +129,6 @@ struct CameraView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black).foregroundStyle(.white)
-        .sheet(isPresented: $showRecordingUpgrade) {
-            ProUpgradeView(freeRecording: { camera.startRecording() }, unlocked: { camera.startRecording() })
-        }
         .sheet(isPresented: $showLibrary) { RecordingLibraryView() }
         .sheet(isPresented: $showSettings) { RecordingSettingsView(camera: camera, gridEnabled: $gridEnabled) }
         .alert("拍摄提示", isPresented: Binding(get: { camera.message != nil }, set: { if !$0 { camera.message = nil } })) {
@@ -179,6 +174,19 @@ struct CameraView: View {
     private var timer: String {
         let seconds = Int(camera.duration)
         return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private var livePreview: some View {
+        CameraPreview(session: camera.session, device: camera.previewDevice,
+            gridEnabled: gridEnabled, interactionEnabled: camera.phase == .ready || recording,
+            focusFeedback: camera.focusFeedback, rotationChanged: camera.setCameraRotation,
+            focusRequested: camera.focus,
+            zoomChanged: { scale, ended in
+                if ended { pinchStartZoom = nil; return }
+                if pinchStartZoom == nil { pinchStartZoom = camera.zoom }
+                camera.setZoom((pinchStartZoom ?? camera.zoom) * scale)
+            })
+            .ignoresSafeArea()
     }
 }
 

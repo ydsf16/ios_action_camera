@@ -2,8 +2,6 @@
 import SwiftUI
 
 struct ProUpgradeView: View {
-    var freeRecording: (() -> Void)? = nil
-    var unlocked: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var access = ProAccess.shared
     var body: some View {
@@ -25,7 +23,7 @@ struct ProUpgradeView: View {
                         Label("素材保存在本机，原片随时导出", systemImage: "internaldrive")
                     }.font(.subheadline)
                     if access.hasPro {
-                        Button("继续") { dismiss(); unlocked?() }.buttonStyle(PrimaryActionStyle())
+                        Button("完成") { dismiss() }.buttonStyle(PrimaryActionStyle())
                     } else {
                         Button {
                             Task { await access.purchase() }
@@ -40,11 +38,6 @@ struct ProUpgradeView: View {
                             Spacer()
                             if access.product == nil { Button("重试") { Task { await access.loadProduct() } } }
                         }.font(.subheadline).disabled(access.busy || access.loadingProduct)
-                    }
-                    if let freeRecording, !access.hasPro {
-                        Button("免费录制 1 分钟") { dismiss(); freeRecording() }
-                            .frame(maxWidth: .infinity).buttonStyle(.bordered)
-                            .disabled(access.busy)
                     }
                     if let message = access.message { Text(message).font(.footnote).foregroundStyle(AppTheme.amber) }
                     Text("免费录制到 1 分钟会自动停止并保存，稳定处理和导出不再收费。长视频需要更多存储空间和处理时间。")
@@ -61,7 +54,7 @@ struct ProUpgradeView: View {
         }.tint(AppTheme.accent)
             .interactiveDismissDisabled(access.busy)
             .task { await access.refresh(); if !access.hasPro { await access.loadProduct() } }
-            .onChange(of: access.hasPro) { _, value in if value { dismiss(); unlocked?() } }
+            .onChange(of: access.hasPro) { _, value in if value { dismiss() } }
     }
 }
 

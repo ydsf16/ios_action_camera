@@ -11,10 +11,12 @@ func text(_ string: String, _ x: CGFloat, _ y: CGFloat, _ width: CGFloat, _ heig
 }
 struct Card { let file: String; let source: String; let label: String; let title: String; let subtitle: String; let footnote: String; let accent: UInt32 }
 let cards = [
- Card(file:"01-playback.png",source:"raw/playback.png",label:"全屏回看",title:"拍完以后，\n再选稳定感。",subtitle:"原片保留，随时调整与导出。",footnote:"实际应用界面 · 风景为 AI 生成的演示素材",accent:0x46DAC6),
- Card(file:"02-simple.png",source:"raw/simple.png",label:"轻松设置",title:"三档稳定，\n一点就好。",subtitle:"自然 / 标准 / 强力 · 支持重力水平锁定",footnote:"生成前选择 1080p 或 2.8K 输出",accent:0x6AABF5),
- Card(file:"03-controls.png",source:"raw/advanced.png",label:"高级控制",title:"视野与裁切，\n由你决定。",subtitle:"动态缩放、裁切上限、允许黑边。",footnote:"稳定效果取决于素材、光线和所选参数",accent:0xB29AF8),
- Card(file:"04-unlock.png",source:"iap-review.png",label:"免费开始",title:"先免费拍，\n再决定。",subtitle:"每段 1 分钟免费 · 长时间录制一次买断",footnote:"免费不限次数 · 稳定与导出无水印 · 无订阅",accent:0x46DAC6)
+ Card(file:"01-capture.png",source:"raw/capture.png",label:"随身运动相机",title:"把 iPhone\n变成运动相机。",subtitle:"旅行、徒步、日常走拍，拿起手机就出发。",footnote:"实际应用控件 · 取景为 AI 生成的演示素材",accent:0x46DAC6),
+ Card(file:"02-zoom.png",source:"raw/zoom.png",label:"长焦与变焦",title:"拉近远处，\n拍后稳住。",subtitle:"长焦与放大拍摄，也能进行拍后防抖。",footnote:"界面演示 · AI 生成风景 · 非实拍防抖对比",accent:0x6AABF5),
+ Card(file:"03-playback.png",source:"raw/playback.png",label:"全屏回看",title:"拍完以后，\n再选稳定感。",subtitle:"原片保留，随时调整与导出。",footnote:"实际应用界面 · 风景为 AI 生成的演示素材",accent:0x46DAC6),
+ Card(file:"04-simple.png",source:"raw/simple.png",label:"轻松设置",title:"三档稳定，\n一点就好。",subtitle:"自然 / 标准 / 强力 · 支持重力水平锁定",footnote:"生成前选择 1080p 或 2.8K 输出",accent:0x6AABF5),
+ Card(file:"05-unlock.png",source:"iap-review.png",label:"免费开始",title:"免费拍摄，\n随时出发。",subtitle:"每段 1 分钟免费 · 长时间录制一次买断",footnote:"升级入口在设置 · 稳定与导出无水印 · 无订阅",accent:0x46DAC6),
+ Card(file:"06-controls.png",source:"raw/advanced.png",label:"高级控制",title:"视野与裁切，\n由你决定。",subtitle:"动态缩放、裁切上限、允许黑边。",footnote:"稳定效果取决于素材、光线和所选参数",accent:0xB29AF8)
 ]
 try FileManager.default.createDirectory(at: root.appendingPathComponent("store"), withIntermediateDirectories:true)
 for (index,card) in cards.enumerated() {
@@ -24,7 +26,7 @@ for (index,card) in cards.enumerated() {
  NSGradient(starting:color(0x142737),ending:color(0x080D17))!.draw(in:NSRect(x:0,y:0,width:W,height:H),angle:270)
  let accent=color(card.accent)
  icon.draw(in:box(80,77,66,66));text("RoamShot",164,83,440,70,size:43,weight:.semibold)
- text(String(format:"%02d",index+1)+" / 04",1072,96,160,50,size:27,weight:.medium,ink:color(0x8BA2B3))
+ text(String(format:"%02d / %02d",index+1,cards.count),1072,96,160,50,size:27,weight:.medium,ink:color(0x8BA2B3))
  text(card.label,80,199,1100,70,size:31,weight:.semibold,ink:accent)
  text(card.title,74,273,1150,244,size:99,weight:.bold)
  text(card.subtitle,82,541,1120,68,size:35,weight:.medium,ink:color(0xB5C8D5))
@@ -47,7 +49,7 @@ for (index,card) in cards.enumerated() {
 }
 
 // Compact review sheet; full-size uploads remain separate and unchanged.
-let previewW=1360, previewH=750
+let previewW=2036, previewH=750
 let previewCG=CGContext(data:nil,width:previewW,height:previewH,bitsPerComponent:8,bytesPerRow:previewW*4,space:CGColorSpace(name:CGColorSpace.sRGB)!,bitmapInfo:CGImageAlphaInfo.noneSkipLast.rawValue)!
 NSGraphicsContext.saveGraphicsState();NSGraphicsContext.current=NSGraphicsContext(cgContext:previewCG,flipped:false)
 color(0x0B1420).setFill();NSRect(x:0,y:0,width:previewW,height:previewH).fill()
