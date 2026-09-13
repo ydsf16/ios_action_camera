@@ -194,7 +194,7 @@ fn create(config: Config) -> Result<Engine, String> {
 
 /// Pose/crop diagnostics only. No image buffers are read or copied.
 #[no_mangle]
-pub unsafe extern "C" fn mc_engine_report(engine: *const Engine, report: *mut StabilizationReport) -> i32 {
+pub unsafe extern "C" fn roamshot_engine_report(engine: *const Engine, report: *mut StabilizationReport) -> i32 {
     if engine.is_null() || report.is_null() { return -1; }
     *report = (*engine).report;
     0
@@ -209,7 +209,7 @@ unsafe fn error_out(message: &str, dst: *mut c_char, capacity: usize) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn mc_engine_create(json: *const c_char, error: *mut c_char, capacity: usize) -> *mut Engine {
+pub unsafe extern "C" fn roamshot_engine_create(json: *const c_char, error: *mut c_char, capacity: usize) -> *mut Engine {
     let result = catch_unwind(AssertUnwindSafe(|| {
         if json.is_null() { return Err("Null config".into()); }
         let data = CStr::from_ptr(json).to_bytes();
@@ -224,7 +224,7 @@ pub unsafe extern "C" fn mc_engine_create(json: *const c_char, error: *mut c_cha
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn mc_engine_process(engine: *mut Engine, timestamp_us: i64,
+pub unsafe extern "C" fn roamshot_engine_process(engine: *mut Engine, timestamp_us: i64,
     input: *mut u8, input_len: usize, input_stride: usize,
     output: *mut u8, output_len: usize, output_stride: usize,
     error: *mut c_char, capacity: usize) -> i32 {
@@ -258,7 +258,7 @@ pub unsafe extern "C" fn mc_engine_process(engine: *mut Engine, timestamp_us: i6
 /// Row-major output-pixel to input-pixel homography, padded to three float4 rows.
 /// This fast path is valid only for our current zero-residual-distortion, no-RS contract.
 #[no_mangle]
-pub unsafe extern "C" fn mc_engine_transform(engine: *mut Engine, timestamp_us: i64,
+pub unsafe extern "C" fn roamshot_engine_transform(engine: *mut Engine, timestamp_us: i64,
     output: *mut f32, capacity: usize) -> i32 {
     catch_unwind(AssertUnwindSafe(|| {
         if engine.is_null() || output.is_null() || capacity < 12 { return -1; }
@@ -292,7 +292,7 @@ pub unsafe extern "C" fn mc_engine_transform(engine: *mut Engine, timestamp_us: 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn mc_engine_destroy(engine: *mut Engine) {
+pub unsafe extern "C" fn roamshot_engine_destroy(engine: *mut Engine) {
     if !engine.is_null() { drop(Box::from_raw(engine)); }
 }
 
@@ -347,7 +347,7 @@ mod tests {
             for tilt in [-20.0f64, 0., 20.] {
                 let mut engine = create(gravity_fixture(rotation, tilt)).unwrap();
                 let mut h = [0f32;12];
-                assert_eq!(unsafe { mc_engine_transform(&mut engine, 500000, h.as_mut_ptr(), h.len()) }, 0);
+                assert_eq!(unsafe { roamshot_engine_transform(&mut engine, 500000, h.as_mut_ptr(), h.len()) }, 0);
                 // Native output->input warp must remove the tilt while leaving the
                 // quarter-turn display transform to Swift. Zero tilt means identity.
                 let c = tilt.to_radians().cos(); let s = tilt.to_radians().sin();
@@ -481,7 +481,7 @@ mod tests {
         let mut engine = create(input).unwrap();
         for frame in [0, 5, 10, 15, 20, 25] {
             let mut h = [0f32; 12];
-            assert_eq!(unsafe { mc_engine_transform(&mut engine, frame * 33333, h.as_mut_ptr(), h.len()) }, 0);
+            assert_eq!(unsafe { roamshot_engine_transform(&mut engine, frame * 33333, h.as_mut_ptr(), h.len()) }, 0);
             // A stationary, already-zoomed input must retain its framing; the
             // stabilizer must not undo the user's zoom using a constant output K.
             for (x, y) in [(40., 35.), (320., 180.), (590., 325.)] {
@@ -516,7 +516,7 @@ mod tests {
                 let start = std::time::Instant::now();
                 let mut output = vec![0u8;640*360*4];
                 let mut err = vec![0i8;1024];
-                let status = unsafe { mc_engine_process(engine, timestamp, input.as_mut_ptr(),input.len(),2560,
+                let status = unsafe { roamshot_engine_process(engine, timestamp, input.as_mut_ptr(),input.len(),2560,
                     output.as_mut_ptr(),output.len(),2560,err.as_mut_ptr(),err.len()) };
                 assert_eq!(status,0, "{}", unsafe { CStr::from_ptr(err.as_ptr()) }.to_string_lossy());
                 println!("gpu={} elapsed={:?}", engine.use_gpu, start.elapsed());
@@ -535,12 +535,12 @@ mod tests {
         for px in input.chunks_exact_mut(4) { px.copy_from_slice(&[20,80,160,255]); }
         let mut output = vec![0u8;640*360*4];
         let mut err = vec![0i8;1024];
-        let status = unsafe { mc_engine_process(&mut e, 500000, input.as_mut_ptr(),input.len(),2560,
+        let status = unsafe { roamshot_engine_process(&mut e, 500000, input.as_mut_ptr(),input.len(),2560,
             output.as_mut_ptr(),output.len(),2560,err.as_mut_ptr(),err.len()) };
         assert_eq!(status,0);
         let center=(180*640+320)*4;
         assert_eq!(&output[center..center+4], &[20,80,160,255]);
-        let invalid = unsafe { mc_engine_process(&mut e,500000,input.as_mut_ptr(),4,2560,
+        let invalid = unsafe { roamshot_engine_process(&mut e,500000,input.as_mut_ptr(),4,2560,
             output.as_mut_ptr(),output.len(),2560,err.as_mut_ptr(),err.len()) };
         assert_eq!(invalid,-1);
     }
@@ -587,7 +587,7 @@ mod tests {
                 input[index+2] = (x*255/639) as u8; input[index+3] = 255;
             }}
             let mut output = vec![0u8; 320*180*4]; let mut error = vec![0i8;1024];
-            let status = unsafe { mc_engine_process(&mut e, 500000, input.as_mut_ptr(), input.len(),2560,
+            let status = unsafe { roamshot_engine_process(&mut e, 500000, input.as_mut_ptr(), input.len(),2560,
                 output.as_mut_ptr(), output.len(),1280,error.as_mut_ptr(),error.len()) };
             assert_eq!(status, 0);
             let pixel = output[(90*320+32)*4+2] as i32;
@@ -612,7 +612,7 @@ mod tests {
             let mut error = vec![0i8; 1024];
             let mut black = 0;
             for timestamp in [200000, 400000, 600000, 800000] {
-                let status = unsafe { mc_engine_process(&mut e, timestamp,
+                let status = unsafe { roamshot_engine_process(&mut e, timestamp,
                     input.as_mut_ptr(), input.len(), 2560,
                     output.as_mut_ptr(), output.len(), 2560, error.as_mut_ptr(), error.len()) };
                 assert_eq!(status, 0);
@@ -633,7 +633,7 @@ mod tests {
             config.options.dynamic_crop = false; config.options.max_crop = crop;
             let mut e = create(config).unwrap();
             let mut h = [0f32;12];
-            assert_eq!(unsafe { mc_engine_transform(&mut e, 500000, h.as_mut_ptr(),12) },0);
+            assert_eq!(unsafe { roamshot_engine_transform(&mut e, 500000, h.as_mut_ptr(),12) },0);
             let x = 32.; let y = 90.;
             let u = (h[0]*x+h[1]*y+h[2])/(h[8]*x+h[9]*y+h[10]);
             assert!((u-(320.-256./crop as f32)).abs() < 0.01, "crop={crop}, u={u}");
@@ -652,7 +652,7 @@ mod tests {
             config.options.dynamic_crop = false; config.options.max_crop = crop;
             let mut engine = create(config).unwrap();
             let mut h = [0f32; 12];
-            assert_eq!(unsafe { mc_engine_transform(&mut engine, 500000, h.as_mut_ptr(), 12) }, 0);
+            assert_eq!(unsafe { roamshot_engine_transform(&mut engine, 500000, h.as_mut_ptr(), 12) }, 0);
             let x = 281.6; let y = 792.;
             let u = (h[0]*x+h[1]*y+h[2])/(h[8]*x+h[9]*y+h[10]);
             assert!((u-(1920.-1536./crop as f32)).abs() < 0.01, "crop={crop}, u={u}");

@@ -28,7 +28,7 @@ enum StabilizationProcessor {
     private static func makeEngine(_ config: StabilizationInput) throws -> OpaquePointer {
         let json = String(decoding: try JSONEncoder().encode(config), as: UTF8.self)
         var error = [CChar](repeating: 0, count: 2048)
-        guard let engine = json.withCString({ mc_engine_create($0, &error, error.count) }) else {
+        guard let engine = json.withCString({ roamshot_engine_create($0, &error, error.count) }) else {
             let reason = String(cString: error)
             if reason.hasPrefix("裁切上限不足：") { throw ParameterConflict.cropLimit }
             throw InputError("稳定引擎初始化失败：\(reason)")
@@ -36,8 +36,8 @@ enum StabilizationProcessor {
         return engine
     }
     private static func report(_ engine: OpaquePointer) throws -> StabilizationReport {
-        var value = MCStabilizationReport()
-        guard mc_engine_report(engine, &value) == 0 else { throw InputError("无法读取稳定处理结果。") }
+        var value = RoamShotStabilizationReport()
+        guard roamshot_engine_report(engine, &value) == 0 else { throw InputError("无法读取稳定处理结果。") }
         return StabilizationReport(requestedSmoothingSeconds: value.requested_smoothing_seconds,
             effectiveSmoothingSeconds: value.effective_smoothing_seconds, minimumCrop: value.minimum_crop, maximumCrop: value.maximum_crop,
             requestedHorizonPercent: value.requested_horizon_percent, effectiveHorizonPercent: value.effective_horizon_percent)
@@ -57,7 +57,7 @@ enum StabilizationProcessor {
         let config = try StabilizationInput.load(directory: directory, options: options)
         try control.checkpoint()
         let engine = try makeEngine(config)
-        defer { mc_engine_destroy(engine) }
+        defer { roamshot_engine_destroy(engine) }
         try control.checkpoint()
         let asset = AVURLAsset(url: directory.appendingPathComponent("video.mov"))
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw InputError("找不到视频轨道。") }
@@ -88,7 +88,7 @@ enum StabilizationProcessor {
         try control.checkpoint()
         mark("initializing-core")
         let engine = try makeEngine(config)
-        defer { mc_engine_destroy(engine) }
+        defer { roamshot_engine_destroy(engine) }
         let stabilizationReport = try report(engine)
         measured("pose_smoothing_crop_seconds")
         let renderer = try legacy ? nil : MetalStabilizer()
@@ -223,7 +223,7 @@ enum StabilizationProcessor {
                     if let renderer {
                         let transformStart = CFAbsoluteTimeGetCurrent()
                         var rows = [Float](repeating: 0, count: 12)
-                        guard mc_engine_transform(engine, timestamp, &rows, rows.count) == 0 else { throw InputError("素材不支持当前 Metal 投影模型。") }
+                        guard roamshot_engine_transform(engine, timestamp, &rows, rows.count) == 0 else { throw InputError("素材不支持当前 Metal 投影模型。") }
                         timings["frame_transform_seconds", default: 0] += CFAbsoluteTimeGetCurrent()-transformStart
                         let submitStart = CFAbsoluteTimeGetCurrent()
                         let frame = try renderer.submit(source: source, output: result, rows: rows)
@@ -235,7 +235,7 @@ enum StabilizationProcessor {
                         CVPixelBufferLockBaseAddress(source, .readOnly); CVPixelBufferLockBaseAddress(result, [])
                         defer { CVPixelBufferUnlockBaseAddress(source, .readOnly); CVPixelBufferUnlockBaseAddress(result, []) }
                         guard let src = CVPixelBufferGetBaseAddress(source), let dst = CVPixelBufferGetBaseAddress(result) else { throw InputError("视频缓存不可用。") }
-                        let code = mc_engine_process(engine, timestamp,
+                        let code = roamshot_engine_process(engine, timestamp,
                             src.assumingMemoryBound(to: UInt8.self), CVPixelBufferGetDataSize(source), CVPixelBufferGetBytesPerRow(source),
                             dst.assumingMemoryBound(to: UInt8.self), CVPixelBufferGetDataSize(result), CVPixelBufferGetBytesPerRow(result),
                             &errorBuffer, errorBuffer.count)

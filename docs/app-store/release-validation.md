@@ -1,4 +1,4 @@
-# RoamShot 1.0.0 (25) release validation
+# RoamShot 1.0.0 release validation
 
 ## Identity and packaging
 
@@ -20,4 +20,7 @@
 - StoreKitTest automated session configuration reports `SKInternalErrorDomain Code=3` on the installed simulator runtime. A preflight check now skips when dialog configuration is rejected, preventing a hanging purchase test. Full restore, pending approval and App Store sandbox still require successful validation.
 - Physical iPhone unavailable at the latest device check. Verify a fresh 4K60 recording reaches the 60-second cap, closes video/audio/CSV normally, preserves camera-to-host clock mapping and IMU axes, and produces 2.8K output with audio. Verify Pro records beyond 60 seconds.
 - Build 1.0.0 (25) uploaded successfully to App Store Connect. The source tag `v1.0.0-build.25` and main branch are public. Support, privacy and terms URLs each returned HTTP 200 after GitHub Pages deployment.
-- App review contacts/copyright, account agreements and final store metadata/screenshots must be completed before review submission. Exporting or uploading a build does not mean review approval or availability on the App Store.
+- Build 26 also renames the remaining internal C API abbreviations to roamshot_engine_ and RoamShot type names; iOS archive, simulator build, binary string and linkage audits passed.
+- The automated CommerceQA rerun produced one skipped test, zero executed purchase scenarios, because StoreKit rejected configuration. Local manual purchase/refund evidence remains separate.
+- Store metadata: age 4+, no collected data, free download, Mac/Vision Pro distribution disabled, and IAP review screenshot and review draft configured.
+- App review contacts/copyright and first-release countries remain awaiting user input. The account business page explicitly reports an updated Developer Program agreement awaiting the account holder; the Paid Apps agreement is active. Exporting or uploading a build does not mean review approval or availability on the App Store.

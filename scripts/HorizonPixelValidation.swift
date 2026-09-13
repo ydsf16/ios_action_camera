@@ -24,10 +24,10 @@ enum HorizonPixelValidation {
                     "gravity":times.map { ["timestamp_ms":$0,"gravity":[-cos(angle),-sin(angle),0]] as [String: Any] }]
                 let json = String(decoding: try JSONSerialization.data(withJSONObject: config), as: UTF8.self)
                 var error = [CChar](repeating: 0, count: 2048)
-                guard let engine = json.withCString({ mc_engine_create($0, &error, error.count) }) else { throw InputError(String(cString: error)) }
-                defer { mc_engine_destroy(engine) }
+                guard let engine = json.withCString({ roamshot_engine_create($0, &error, error.count) }) else { throw InputError(String(cString: error)) }
+                defer { roamshot_engine_destroy(engine) }
                 var rows = [Float](repeating: 0, count: 12)
-                guard mc_engine_transform(engine, 500000, &rows, rows.count) == 0 else { throw InputError("Horizon warp failed") }
+                guard roamshot_engine_transform(engine, 500000, &rows, rows.count) == 0 else { throw InputError("Horizon warp failed") }
                 let source = try buffer(), output = try buffer()
                 CVPixelBufferLockBaseAddress(source, [])
                 let luma = CVPixelBufferGetBaseAddressOfPlane(source,0)!.assumingMemoryBound(to: UInt8.self)
