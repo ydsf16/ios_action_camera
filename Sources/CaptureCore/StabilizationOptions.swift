@@ -8,26 +8,61 @@ public enum ExportResolution: String, CaseIterable, Codable, Identifiable, Senda
 }
 
 public struct StabilizationOptions: Codable, Equatable, Sendable {
-    public var strength: Double = 0.5
+    /// Store the physical smoothing parameter so future UI scales cannot alter old clips.
+    public var smoothingSeconds: Double = 0.8
+    public var strength: Double {
+        get { log1p(smoothingSeconds / 0.1) / log(101) }
+        set { smoothingSeconds = newValue == 1 ? 10 : 0.1 * expm1(newValue * log(101)) }
+    }
+    public var strengthLabel: String {
+        if smoothingSeconds == 0 { return "关闭" }
+        if smoothingSeconds < 0.5 { return "自然" }
+        if smoothingSeconds < 2 { return "标准" }
+        if smoothingSeconds < 4 { return "强" }
+        return "超强"
+    }
     public var maxCrop: Double = 2.0
     public var dynamicCrop: Bool = true
     public var allowBlackBorders: Bool = false
+    public var zoomTransitionSeconds: Double = 2
+    public var horizonLock: Bool = false
     public var exportResolution: ExportResolution = .action2_8K
     public init() {}
     private enum CodingKeys: String, CodingKey {
-        case strength, maxCrop, dynamicCrop, allowBlackBorders, exportResolution
+        case strength, smoothingSeconds, maxCrop, dynamicCrop, allowBlackBorders, exportResolution, zoomTransitionSeconds, horizonLock
     }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        strength = try values.decode(Double.self, forKey: .strength)
+        if let seconds = try values.decodeIfPresent(Double.self, forKey: .smoothingSeconds) {
+            smoothingSeconds = seconds
+        } else {
+            let legacy = try values.decode(Double.self, forKey: .strength)
+            guard legacy.isFinite, (0...1).contains(legacy) else { throw InputError("旧版稳定参数无效。") }
+            // Old 0% meant 0.16 s, not off. Preserve the requested effect exactly.
+            smoothingSeconds = 0.16 * pow(25, legacy)
+        }
         maxCrop = try values.decode(Double.self, forKey: .maxCrop)
         dynamicCrop = try values.decode(Bool.self, forKey: .dynamicCrop)
         allowBlackBorders = try values.decode(Bool.self, forKey: .allowBlackBorders)
         // Existing per-clip/default settings retain their stabilization choices.
         exportResolution = try values.decodeIfPresent(ExportResolution.self, forKey: .exportResolution) ?? .fullHD
+        zoomTransitionSeconds = try values.decodeIfPresent(Double.self, forKey: .zoomTransitionSeconds) ?? 2
+        horizonLock = try values.decodeIfPresent(Bool.self, forKey: .horizonLock) ?? false
+    }
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(smoothingSeconds, forKey: .smoothingSeconds)
+        try values.encode(maxCrop, forKey: .maxCrop)
+        try values.encode(dynamicCrop, forKey: .dynamicCrop)
+        try values.encode(allowBlackBorders, forKey: .allowBlackBorders)
+        try values.encode(exportResolution, forKey: .exportResolution)
+        try values.encode(zoomTransitionSeconds, forKey: .zoomTransitionSeconds)
+        try values.encode(horizonLock, forKey: .horizonLock)
     }
     public var isValid: Bool {
-        strength.isFinite && (0...1).contains(strength) && maxCrop.isFinite && (1...5).contains(maxCrop)
+        smoothingSeconds.isFinite && (0...10).contains(smoothingSeconds)
+            && maxCrop.isFinite && (1...5).contains(maxCrop)
+            && zoomTransitionSeconds.isFinite && (0.5...10).contains(zoomTransitionSeconds)
     }
     public static func defaults() -> Self {
         guard let data = UserDefaults.standard.data(forKey: "stabilizationDefaults"),

@@ -48,6 +48,11 @@ enum StabilizationProcessor {
             throw InputError("稳定引擎初始化失败：\(String(cString: errorBuffer))")
         }
         defer { mc_engine_destroy(engine) }
+        var coreReport = MCStabilizationReport()
+        guard mc_engine_report(engine, &coreReport) == 0 else { throw InputError("无法读取稳定处理结果。") }
+        let stabilizationReport = StabilizationReport(requestedSmoothingSeconds: coreReport.requested_smoothing_seconds,
+            effectiveSmoothingSeconds: coreReport.effective_smoothing_seconds,
+            minimumCrop: coreReport.minimum_crop, maximumCrop: coreReport.maximum_crop)
         measured("pose_smoothing_crop_seconds")
         let renderer = try legacy ? nil : MetalStabilizer()
         let pixelFormat = legacy ? kCVPixelFormatType_32BGRA : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
@@ -59,6 +64,15 @@ enum StabilizationProcessor {
         defer { try? FileManager.default.removeItem(at: temporary) }
         let asset = AVURLAsset(url: original)
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else { throw InputError("找不到视频轨道。") }
+        let displayTransform = try await videoTrack.load(.preferredTransform)
+        if options.horizonLock {
+            let angle = Double(config.display_rotation_degrees) * .pi / 180
+            let expected = CGAffineTransform(rotationAngle: angle)
+            guard zip([displayTransform.a, displayTransform.b, displayTransform.c, displayTransform.d],
+                      [expected.a, expected.b, expected.c, expected.d]).allSatisfy({ abs($0.0-$0.1) < 0.0001 }) else {
+                throw InputError("视频显示方向与录制信息不一致，无法可靠锁定水平。")
+            }
+        }
         let reader = try AVAssetReader(asset: asset)
         let videoReader = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: [
             kCVPixelBufferPixelFormatTypeKey as String: pixelFormat,
@@ -81,7 +95,7 @@ enum StabilizationProcessor {
             AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: CaptureFormat.videoBitRate(width: config.output_width, height: config.output_height, fps: Int(config.fps)),
                 AVVideoExpectedSourceFrameRateKey: Int(config.fps), AVVideoAllowFrameReorderingKey: false]])
         videoWriter.mediaTimeScale = 1_000_000
-        videoWriter.transform = try await videoTrack.load(.preferredTransform)
+        videoWriter.transform = displayTransform
         guard writer.canAdd(videoWriter) else { throw InputError("无法创建视频编码器。") }
         writer.add(videoWriter)
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: videoWriter, sourcePixelBufferAttributes: [
@@ -222,13 +236,27 @@ enum StabilizationProcessor {
             guard writer.status == .completed else { throw writer.error ?? InputError("稳定视频封装失败。") }
             measured("finish_audio_container_seconds")
             let receipt: [String:Any] = ["engine":"Gyroflow 1.6.3", "backend":legacy ? "Metal (wgpu BGRA benchmark)" : "Metal NV12 IOSurface", "timings":timings, "max_inflight_frames":legacy ? 1 : 3, "app_cpu_pixel_copies_per_frame":legacy ? 2 : 0, "interpolation":"Lanczos4", "processing_seconds":Date().timeIntervalSince(processingStarted), "options": try JSONSerialization.jsonObject(with: JSONEncoder().encode(options)), "input_frames":count,"output_width":config.output_width,
-                "output_height":config.output_height,"requested_fps":config.fps,"rolling_shutter":false,"horizon_lock":false,
+                "output_height":config.output_height,"requested_fps":config.fps,"rolling_shutter":false,"horizon_lock":options.horizonLock,
+                "horizon_source":options.horizonLock ? "CoreMotion.gravity" : "off", "gravity_samples":config.gravity.count,
+                "gravity_orientation":"native image axes = [-deviceY, -deviceX, -deviceZ]; horizon roll = -displayRotationDegrees",
+                "stabilization": try JSONSerialization.jsonObject(with: JSONEncoder().encode(stabilizationReport)),
                 "lens_model":"recorded per-frame K; uncalibrated zero residual distortion", "created_at":ISO8601DateFormatter().string(from:Date())]
-            try JSONSerialization.data(withJSONObject:receipt,options:[.prettyPrinted,.sortedKeys])
-                .write(to:directory.appendingPathComponent("stabilization.json"),options:.atomic)
+            let receiptData = try JSONSerialization.data(withJSONObject:receipt,options:[.prettyPrinted,.sortedKeys])
+            let receiptURL = directory.appendingPathComponent("stabilization.json")
+            // Invalidate old diagnostics before publishing a new movie. If publication
+            // is interrupted, an absent report is safer than a mismatched old report.
+            if FileManager.default.fileExists(atPath: receiptURL.path) {
+                try FileManager.default.removeItem(at: receiptURL)
+            }
             if FileManager.default.fileExists(atPath: destination.path) {
                 _ = try FileManager.default.replaceItemAt(destination,withItemAt:temporary)
             } else { try FileManager.default.moveItem(at:temporary,to:destination) }
+            do { try receiptData.write(to: receiptURL, options: .atomic) }
+            catch {
+                // Never attach the previous export's diagnostics to the new movie.
+                try? FileManager.default.removeItem(at: receiptURL)
+                throw InputError("视频已生成，但处理结果信息未能保存：\(error.localizedDescription)")
+            }
             mark("completed")
             completed = true; progress(1)
             return destination

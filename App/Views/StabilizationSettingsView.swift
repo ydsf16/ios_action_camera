@@ -7,8 +7,10 @@ struct StabilizationSettingsView: View {
     @ObservedObject private var jobs = StabilizationJobs.shared
     @State private var options: StabilizationOptions
     @State private var error: String?
+    private let previousResult: StabilizationReport.Receipt?
     init(directory: URL? = nil) {
         self.directory = directory
+        previousResult = directory.flatMap(StabilizationReport.load)
         _options = State(initialValue: directory.map(StabilizationOptions.load) ?? StabilizationOptions.defaults())
     }
     var body: some View {
@@ -33,21 +35,38 @@ struct StabilizationSettingsView: View {
                     HStack {
                         SettingsLabel("强度", symbol: "waveform.path", color: AppTheme.blue)
                         Spacer()
-                        Text("\(Int(options.strength * 100))%")
+                        Text("\(options.strengthLabel) · \(Int((options.strength * 100).rounded()))%")
                             .font(.title3.weight(.semibold).monospacedDigit()).foregroundStyle(AppTheme.blue)
                     }
-                    Slider(value: $options.strength, in: 0...1, step: 0.05)
+                    Slider(value: $options.strength, in: 0...1, step: 0.01)
                         .tint(AppTheme.blue).accessibilityLabel("稳定强度")
                     HStack {
-                        Text("自然运镜")
+                        Text("关闭")
                         Spacer()
-                        Text("更强稳定")
+                        Text("自然")
+                        Spacer()
+                        Text("标准")
+                        Spacer()
+                        Text("强")
+                        Spacer()
+                        Text("超强")
                     }.font(.caption).foregroundStyle(.secondary)
                 }.padding(.vertical, 4)
             } header: { Text("稳定强度") } footer: {
-                Text("越强越能抑制抖动，也会减少自然运镜。")
+                Text("越强越能抑制缓慢晃动，也会减少主动运镜、需要更多裁切。0% 关闭平滑，裁切设置仍保留。")
             }.listRowBackground(AppTheme.surface)
             Section {
+                Toggle(isOn: $options.horizonLock) {
+                    SettingsLabel("重力水平锁定", symbol: "level", color: AppTheme.accent)
+                }.tint(AppTheme.accent)
+            } footer: {
+                Text("使用录制的重力方向保持画面水平，仍可转向和俯仰。可能需要更多裁切；镜头接近朝正上或正下时自动减弱锁定。0% 平滑时也可单独保持水平。")
+            }.listRowBackground(AppTheme.surface)
+            Section {
+                Picker("裁切方式", selection: $options.dynamicCrop) {
+                    Text("动态").tag(true)
+                    Text("固定").tag(false)
+                }.pickerStyle(.segmented)
                 VStack(spacing: 14) {
                     HStack {
                         SettingsLabel(options.dynamicCrop ? "最大裁切" : "固定裁切", symbol: "crop", color: AppTheme.violet)
@@ -58,11 +77,10 @@ struct StabilizationSettingsView: View {
                     Slider(value: $options.maxCrop, in: 1...5, step: 0.1)
                         .tint(AppTheme.violet).accessibilityLabel(options.dynamicCrop ? "最大裁切" : "固定裁切")
                 }.padding(.vertical, 4)
-                Toggle("动态裁切", isOn: $options.dynamicCrop)
-                Toggle("允许黑边", isOn: $options.allowBlackBorders)
-                    .onChange(of: options.allowBlackBorders) { _, allowed in
-                        if allowed { options.dynamicCrop = false; options.maxCrop = 1 }
-                    }
+                Picker("边缘策略", selection: $options.allowBlackBorders) {
+                    Text("画面完整优先").tag(false)
+                    Text("稳定优先（允许黑边）").tag(true)
+                }.tint(AppTheme.accent)
                 if options.allowBlackBorders {
                     Button("保留完整视野（1×，不动态裁切）") {
                         options.dynamicCrop = false; options.maxCrop = 1
@@ -71,9 +89,37 @@ struct StabilizationSettingsView: View {
             } header: { Text("裁切与画面边缘") } footer: {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(options.dynamicCrop ? "按运动自动缩放，最多达到上述倍数。" : "使用上述固定裁切倍数，整段画面不动态缩放。")
-                    Text(options.allowBlackBorders ? "开启时默认使用 1× 固定裁切，保留稳定强度和视野，运动后露出的区域显示黑色。手动增加裁切或开启动态裁切会减少黑边。" : "裁切不足时会降低平滑强度；仍无法覆盖边缘时提示调整参数。")
+                    Text(options.allowBlackBorders ? "保留设定强度；裁切不足的部分显示黑边。切换策略不会改变裁切倍率。" : "裁切不足时降低平滑强度，并在结果中提示；仍无法覆盖边缘时保留原片并提示调整。")
                 }
             }.listRowBackground(AppTheme.surface)
+            if options.dynamicCrop {
+                Section {
+                    DisclosureGroup("高级设置") {
+                        LabeledContent("缩放过渡", value: String(format: "%.1f 秒", options.zoomTransitionSeconds))
+                        Slider(value: $options.zoomTransitionSeconds, in: 0.5...10, step: 0.5)
+                            .tint(AppTheme.violet).accessibilityLabel("缩放过渡时间")
+                        Text("时间越长，自动缩放变化越慢，也会保持裁切更久。拍摄时主动调整的倍率仍会保留。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }.listRowBackground(AppTheme.surface)
+            }
+            if let previousResult {
+                Section {
+                    Label(previousResult.stabilization.summary,
+                          systemImage: previousResult.stabilization.cropLimited ? "exclamationmark.circle" : "checkmark.circle")
+                        .foregroundStyle(previousResult.stabilization.cropLimited ? AppTheme.violet : AppTheme.success)
+                    Text(String(format: "实际裁切 %.1f× – %.1f×", previousResult.stabilization.minimumCrop, previousResult.stabilization.maximumCrop))
+                        .font(.footnote).foregroundStyle(.secondary)
+                    if previousResult.stabilization.cropLimited {
+                        Text("可增大裁切倍率，或选择稳定优先以保留设定强度。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if previousResult.options != options {
+                        Text("当前参数尚未应用，重新生成后更新结果。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                } header: { Text("上次生成结果") }.listRowBackground(AppTheme.surface)
+            }
             Section {
                 Button {
                     do {

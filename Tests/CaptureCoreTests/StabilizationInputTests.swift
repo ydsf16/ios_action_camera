@@ -42,11 +42,41 @@ final class StabilizationInputTests: XCTestCase {
         try manifest.write(to: directory.appendingPathComponent("manifest.json"))
         XCTAssertThrowsError(try StabilizationInput.load(directory: directory))
     }
+    func testGravityUsesSameClockAndKeepsRawAxesWithIndependentSampling() throws {
+        let directory = try fixture(resolution: .fullHD, fps: 60)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let rows = (0..<25).map { "\(1000 - 0.025 + Double($0)*0.011),0.3,-0.4,\(sqrt(0.75))" }
+        try (["host_sec,gx_g,gy_g,gz_g"] + rows).joined(separator: "\n")
+            .write(to: directory.appendingPathComponent("gravity.csv"), atomically: true, encoding: .utf8)
+        var options = StabilizationOptions(); options.horizonLock = true
+        let input = try StabilizationInput.load(directory: directory, options: options)
+        XCTAssertEqual(input.display_rotation_degrees, 90)
+        XCTAssertEqual(input.gravity.count, 25)
+        XCTAssertEqual(input.gravity[0].timestamp_ms, -25, accuracy: 1e-6)
+        XCTAssertEqual(input.gravity[1].timestamp_ms, -14, accuracy: 1e-6)
+        XCTAssertEqual(input.gravity[0].gravity, [0.3,-0.4,sqrt(0.75)])
+        XCTAssertEqual(input.gyro[0].timestamp_ms, -100, accuracy: 1e-6)
+        XCTAssertEqual(input.frames[0].k[2], 960)
+    }
+    func testGravityLockRequiresCompleteValidDataButOldProcessingStillWorks() throws {
+        let directory = try fixture(resolution: .fullHD, fps: 60)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var options = StabilizationOptions(); options.horizonLock = true
+        XCTAssertThrowsError(try StabilizationInput.load(directory: directory, options: options))
+        for rows in [["1000.01,0,-1,0", "1000.02,0,-1,0", "1000.1,0,-1,0"],
+                     ["999.9,0,0,0", "1000,0,0,0", "1000.1,0,0,0"],
+                     ["999.9,0,-1,0", "1000.2,0,-1,0", "1000.21,0,-1,0"]] {
+            try (["host_sec,gx_g,gy_g,gz_g"] + rows).joined(separator: "\n")
+                .write(to: directory.appendingPathComponent("gravity.csv"), atomically: true, encoding: .utf8)
+            XCTAssertThrowsError(try StabilizationInput.load(directory: directory, options: options))
+            XCTAssertNoThrow(try StabilizationInput.load(directory: directory))
+        }
+    }
 
     func testExportResolutionCapsAtSourceAndOldSettingsKeepTheirChoices() throws {
         let old = Data("{\"strength\":0.9,\"maxCrop\":3.5,\"dynamicCrop\":false,\"allowBlackBorders\":true}".utf8)
         var options = try JSONDecoder().decode(StabilizationOptions.self, from: old)
-        XCTAssertEqual(options.strength, 0.9)
+        XCTAssertEqual(options.smoothingSeconds, 0.16 * pow(25, 0.9), accuracy: 1e-12)
         XCTAssertEqual(options.maxCrop, 3.5)
         XCTAssertFalse(options.dynamicCrop)
         XCTAssertTrue(options.allowBlackBorders)

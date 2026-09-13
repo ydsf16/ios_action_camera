@@ -4,6 +4,10 @@ import Metal
     static func main() async {
         do {
             if CommandLine.arguments.contains("--self-test") { try MetalPixelValidation.run(); return }
+            if CommandLine.arguments.contains("--horizon-pixel-test") { try HorizonPixelValidation.run(); return }
+            if let index = CommandLine.arguments.firstIndex(of: "--parameter-test"), index+1 < CommandLine.arguments.count {
+                try await StabilizationParameterValidation.run(fixture: URL(fileURLWithPath: CommandLine.arguments[index+1])); return
+            }
             if let index = CommandLine.arguments.firstIndex(of: "--orientation-test"), index+1 < CommandLine.arguments.count {
                 try await OrientationValidation.run(fixture: URL(fileURLWithPath: CommandLine.arguments[index+1])); return
             }

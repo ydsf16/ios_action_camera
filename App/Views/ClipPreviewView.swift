@@ -16,6 +16,7 @@ struct ClipPreviewView: View {
     @State private var showInfo = false
     @State private var confirmDeletion = false
     @State private var controlsVisible = true
+    @State private var stabilizationReport: StabilizationReport?
 
     private var duration: Double {
         let seconds = player?.currentItem?.duration.seconds ?? 0
@@ -54,6 +55,9 @@ struct ClipPreviewView: View {
         .statusBarHidden()
         .interactiveDismissDisabled(saving || library.deleting)
         .task { if clip.canPlay { replacePlayer() } }
+        .task(id: jobs.revisions[clip.id]) {
+            stabilizationReport = StabilizationReport.load(directory: clip.directory)?.stabilization
+        }
         .sheet(isPresented: $showAdjustment) {
             NavigationStack {
                 StabilizationSettingsView(directory: clip.directory)
@@ -105,6 +109,12 @@ struct ClipPreviewView: View {
     private var playbackControls: some View {
         VStack(spacing: 12) {
             processingStatus
+            if !busy, !showOriginal, hasStable, let stabilizationReport, stabilizationReport.cropLimited {
+                Button { player?.pause(); showAdjustment = true } label: {
+                    Label("已受裁切限制 · 调整", systemImage: "exclamationmark.circle")
+                        .font(.footnote).foregroundStyle(.yellow)
+                }.disabled(saving)
+            }
             if clip.canPlay {
                 TimelineView(.periodic(from: .now, by: 0.25)) { _ in
                     let current = currentSeconds

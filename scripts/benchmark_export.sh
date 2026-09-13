@@ -12,7 +12,7 @@ xcrun -sdk macosx metal -c App/Stabilization/Stabilize.metal -o "$bench_dir/Stab
 xcrun -sdk macosx metallib "$bench_dir/Stabilize.air" -o "$bench_dir/default.metallib"
 xcrun swiftc -O -D DEBUG -parse-as-library -import-objc-header Engine/include/MotionCamGyroflow.h \
     Sources/CaptureCore/*.swift App/Stabilization/MetalStabilizer.swift App/Stabilization/StabilizationProcessor.swift \
-    scripts/ExportBenchmark.swift scripts/MetalPixelValidation.swift scripts/OrientationValidation.swift "Engine/target/$bench_target/release/libmotioncam_gyroflow.a" \
+    scripts/ExportBenchmark.swift scripts/MetalPixelValidation.swift scripts/OrientationValidation.swift scripts/StabilizationParameterValidation.swift scripts/HorizonPixelValidation.swift "Engine/target/$bench_target/release/libmotioncam_gyroflow.a" \
     -lc++ -liconv -framework Metal -framework QuartzCore -framework Security -framework SystemConfiguration \
     -o "$bench_dir/export"
 "$bench_dir/export" "$@"

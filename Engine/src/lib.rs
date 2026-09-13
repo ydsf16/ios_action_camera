@@ -9,11 +9,20 @@ use std::{ffi::{c_char, CStr}, panic::{catch_unwind, AssertUnwindSafe}};
 struct Frame { timestamp_us: i64, k: [f64; 9] }
 #[derive(Deserialize)]
 struct Gyro { timestamp_ms: f64, gyro: [f64; 3] }
+#[derive(Deserialize)]
+struct Gravity { timestamp_ms: f64, gravity: [f64; 3] }
 #[derive(Deserialize, Clone)]
 #[serde(default, rename_all = "camelCase")]
-struct Options { strength: f64, max_crop: f64, dynamic_crop: bool, allow_black_borders: bool }
+struct Options {
+    strength: f64, // Legacy JSON only; new clients send the physical time constant.
+    smoothing_seconds: Option<f64>,
+    max_crop: f64, dynamic_crop: bool, allow_black_borders: bool,
+    zoom_transition_seconds: f64,
+    horizon_lock: bool,
+}
 impl Default for Options {
-    fn default() -> Self { Self { strength: 0.5, max_crop: 2.0, dynamic_crop: true, allow_black_borders: false } }
+    fn default() -> Self { Self { strength: 0.5, smoothing_seconds: None, max_crop: 2.0,
+        dynamic_crop: true, allow_black_borders: false, zoom_transition_seconds: 2.0, horizon_lock: false } }
 }
 #[derive(Deserialize)]
 struct Config {
@@ -21,9 +30,30 @@ struct Config {
     #[serde(default = "default_gpu")] use_gpu: bool,
     width: usize, height: usize, output_width: usize, output_height: usize,
     duration_ms: f64, fps: f64, frames: Vec<Frame>, gyro: Vec<Gyro>,
+    #[serde(default)] gravity: Vec<Gravity>,
+    #[serde(default)] display_rotation_degrees: i32,
 }
 fn default_gpu() -> bool { true }
-pub struct Engine { transforms: gyroflow_core::stabilization::ComputeParams, use_gpu: bool, manager: StabilizationManager, width: usize, height: usize, ow: usize, oh: usize }
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct StabilizationReport {
+    requested_smoothing_seconds: f64, effective_smoothing_seconds: f64,
+    minimum_crop: f64, maximum_crop: f64,
+}
+pub struct Engine { transforms: gyroflow_core::stabilization::ComputeParams, use_gpu: bool, manager: StabilizationManager, width: usize, height: usize, ow: usize, oh: usize, report: StabilizationReport }
+
+// CoreMotion is portrait device x-right/y-up/z-out-of-screen. Unrotated rear-camera
+// image axes are x=-deviceY, y=-deviceX, z=-deviceZ. Gyroflow's gravity API expects
+// this image vector directly; it does NOT apply the raw-gyro XYZ orientation mapping.
+fn image_gravity(g: [f64; 3]) -> nalgebra::Vector3<f64> {
+    nalgebra::Vector3::new(-g[1], -g[0], -g[2]).normalize()
+}
+
+fn gravity_lock_amount(g: &nalgebra::Vector3<f64>) -> f64 {
+    // Roll is undefined when looking along gravity. Fade out before that singularity.
+    let t = ((g.x.hypot(g.y) - 0.05) / 0.15).clamp(0.0, 1.0);
+    100.0 * t*t * (3.0 - 2.0*t)
+}
 
 fn create(config: Config) -> Result<Engine, String> {
     if config.width < 4 || config.height < 4 || config.width > 4096 || config.height > 4096
@@ -40,8 +70,22 @@ fn create(config: Config) -> Result<Engine, String> {
         return Err("Non-monotonic timestamps or invalid calibration values".into());
     }
     if !config.options.strength.is_finite() || !(0.0..=1.0).contains(&config.options.strength)
-        || !config.options.max_crop.is_finite() || !(1.0..=5.0).contains(&config.options.max_crop) {
+        || !config.options.max_crop.is_finite() || !(1.0..=5.0).contains(&config.options.max_crop)
+        || config.options.smoothing_seconds.is_some_and(|s| !s.is_finite() || !(0.0..=10.0).contains(&s))
+        || !config.options.zoom_transition_seconds.is_finite() || !(0.5..=10.0).contains(&config.options.zoom_transition_seconds) {
         return Err("Invalid stabilization options".into());
+    }
+    if config.options.horizon_lock {
+        if ![0,90,180,270].contains(&config.display_rotation_degrees) || config.gravity.len() < 3
+            || config.gravity.iter().any(|g| !g.timestamp_ms.is_finite() || g.timestamp_ms < -10_000.0
+                || g.timestamp_ms > config.duration_ms + 10_000.0
+                || g.gravity.iter().any(|x| !x.is_finite())
+                || !(0.5..=1.5).contains(&nalgebra::Vector3::from(g.gravity).norm()))
+            || config.gravity.windows(2).any(|w| w[1].timestamp_ms <= w[0].timestamp_ms || w[1].timestamp_ms-w[0].timestamp_ms >= 100.0)
+            || config.gravity.first().unwrap().timestamp_ms > config.frames[0].timestamp_us as f64 / 1000.0
+            || config.gravity.last().unwrap().timestamp_ms < config.frames.last().unwrap().timestamp_us as f64 / 1000.0 {
+            return Err("重力数据或录像方向无效，请关闭重力水平锁定后再处理。".into());
+        }
     }
     let manager = StabilizationManager::default();
     // Zooming uses a nominal video grid; image processing is requested by actual PTS.
@@ -66,6 +110,17 @@ fn create(config: Config) -> Result<Engine, String> {
         timestamp_ms: g.timestamp_ms,
         gyro: Some(g.gyro.map(f64::to_degrees)), accl: None, magn: None,
     }).collect();
+    if config.options.horizon_lock {
+        let vectors: gyroflow_core::gyro_source::TimeVec = config.gravity.iter()
+            .map(|g| ((g.timestamp_ms*1000.0).round() as i64, image_gravity(g.gravity))).collect();
+        if vectors.values().any(|g| gravity_lock_amount(g) < 100.0) {
+            let mut keyframes = manager.keyframes.write();
+            for (timestamp, g) in &vectors {
+                keyframes.set(&gyroflow_core::keyframes::KeyframeType::LockHorizonAmount, *timestamp, gravity_lock_amount(g));
+            }
+        }
+        metadata.gravity_vectors = Some(vectors);
+    }
     for frame in &config.frames {
         metadata.lens_params.insert(frame.timestamp_us, LensParams {camera_matrix: Some(frame.k), ..Default::default()});
     }
@@ -74,19 +129,25 @@ fn create(config: Config) -> Result<Engine, String> {
         gyro.init_from_params(&manager.params.read());
         gyro.integration_method = 3;
         gyro.load_from_telemetry(metadata);
+        gyro.use_gravity_vectors = config.options.horizon_lock;
         gyro.integrate();
     }
     manager.set_render_params((config.width,config.height),(config.output_width,config.output_height));
     manager.set_smoothing_method(2); // Plain 3D, follows intentional camera turns.
-    manager.set_adaptive_zoom(2.0);
+    manager.set_adaptive_zoom(config.options.zoom_transition_seconds);
     manager.set_max_zoom(0.0, 0); // Apply our explicit crop bound below, independent of output resolution.
     manager.set_frame_readout_time(0.0); // Unknown readout: no rolling-shutter correction.
     manager.set_background_color(nalgebra::Vector4::new(0.0,0.0,0.0,255.0));
-    manager.set_horizon_lock(0.0, 0.0);
+    // The movie display transform is applied by Swift after native-pixel processing.
+    // Offset the target horizon only; rotating the video here would rotate it twice.
+    manager.set_horizon_lock(if config.options.horizon_lock { 100.0 } else { 0.0 },
+        if config.options.horizon_lock { -f64::from(config.display_rotation_degrees) } else { 0.0 });
     manager.set_video_rotation(0.0); // Swift preserves the source track transform.
-    let requested_tau = 0.16 * 25.0f64.powf(config.options.strength);
+    let requested_tau = config.options.smoothing_seconds.unwrap_or_else(|| 0.16 * 25.0f64.powf(config.options.strength));
     let limit = 1.0 / config.options.max_crop;
     let mut acceptable = false;
+    let mut report = StabilizationReport { requested_smoothing_seconds: requested_tau,
+        effective_smoothing_seconds: requested_tau, minimum_crop: 1.0, maximum_crop: 1.0 };
     for factor in [1.0, 0.5, 0.25, 0.1, 0.02] {
         manager.set_smoothing_param("time_constant", requested_tau * factor);
         manager.recompute_blocking();
@@ -98,6 +159,9 @@ fn create(config: Config) -> Result<Engine, String> {
             for fov in &mut params.fovs {
                 *fov = if config.options.dynamic_crop { fov.clamp(limit, 1.0) } else { limit };
             }
+            report.effective_smoothing_seconds = requested_tau * factor;
+            report.minimum_crop = params.fovs.iter().map(|f| 1.0/f).fold(f64::INFINITY, f64::min);
+            report.maximum_crop = params.fovs.iter().map(|f| 1.0/f).fold(1.0, f64::max);
             acceptable = true; break;
         }
     }
@@ -105,7 +169,15 @@ fn create(config: Config) -> Result<Engine, String> {
     manager.recompute_undistortion();
     manager.set_device(if config.use_gpu { 0 } else { -1 });
     let transforms = gyroflow_core::stabilization::ComputeParams::from_manager(&manager);
-    Ok(Engine { transforms, use_gpu: config.use_gpu, manager, width: config.width, height: config.height, ow: config.output_width, oh: config.output_height })
+    Ok(Engine { transforms, use_gpu: config.use_gpu, manager, width: config.width, height: config.height, ow: config.output_width, oh: config.output_height, report })
+}
+
+/// Pose/crop diagnostics only. No image buffers are read or copied.
+#[no_mangle]
+pub unsafe extern "C" fn mc_engine_report(engine: *const Engine, report: *mut StabilizationReport) -> i32 {
+    if engine.is_null() || report.is_null() { return -1; }
+    *report = (*engine).report;
+    0
 }
 
 unsafe fn error_out(message: &str, dst: *mut c_char, capacity: usize) {
@@ -210,7 +282,8 @@ mod tests {
     fn fixture() -> Config {
         Config {use_gpu:false,options:Options::default(),width:640,height:360,output_width:640,output_height:360,duration_ms:1000.0,fps:30.0,
             frames:(0..30).map(|i|Frame {timestamp_us:i*33333,k:[500.,0.,320.,0.,510.,180.,0.,0.,1.]}).collect(),
-            gyro:(-5..110).map(|i|Gyro{timestamp_ms:i as f64*10.,gyro:[0.,0.,0.]}).collect()}
+            gyro:(-5..110).map(|i|Gyro{timestamp_ms:i as f64*10.,gyro:[0.,0.,0.]}).collect(),
+            gravity: Vec::new(), display_rotation_degrees: 0 }
     }
     #[test]
     fn stationary_motion_and_full_intrinsics() {
@@ -220,6 +293,108 @@ mod tests {
         assert_eq!(k[(0,0)],500.); assert_eq!(k[(1,1)],510.); assert_eq!(k[(0,2)],320.);
         assert!(!engine.manager.gyro.read().quaternions.is_empty());
         assert!(engine.manager.params.read().fovs.iter().all(|v|*v > 0.9));
+    }
+    #[test]
+    fn zero_smoothing_does_not_correct_motion() {
+        let mut config = fixture();
+        config.options.smoothing_seconds = Some(0.);
+        config.options.allow_black_borders = true;
+        config.options.dynamic_crop = false;
+        config.options.max_crop = 1.;
+        for sample in &mut config.gyro { sample.gyro = [0.2, (sample.timestamp_ms/100.).sin(), 0.3]; }
+        let engine = create(config).unwrap();
+        assert!(engine.manager.gyro.read().smoothed_quaternions.values().all(|q| q.angle() < 1e-7));
+        assert_eq!(engine.report.effective_smoothing_seconds, 0.);
+    }
+    fn gravity_fixture(rotation: i32, tilt_degrees: f64) -> Config {
+        let mut config = fixture();
+        config.options.smoothing_seconds = Some(0.);
+        config.options.horizon_lock = true;
+        config.options.allow_black_borders = true;
+        config.options.dynamic_crop = false; config.options.max_crop = 1.;
+        config.display_rotation_degrees = rotation;
+        for frame in &mut config.frames { frame.k[4] = 500.; }
+        let angle = (rotation as f64 + tilt_degrees).to_radians();
+        // Level device gravity: landscape0=(-1,0,0), portrait90=(0,-1,0),
+        // landscape180=(1,0,0), inverted270=(0,1,0).
+        config.gravity = (-5..110).map(|i| Gravity { timestamp_ms: i as f64 * 10.,
+            gravity: [-angle.cos(), -angle.sin(), 0.] }).collect();
+        config
+    }
+    #[test]
+    fn gravity_horizon_aligns_both_roll_directions_in_all_capture_orientations() {
+        for rotation in [0,90,180,270] {
+            for tilt in [-20.0f64, 0., 20.] {
+                let mut engine = create(gravity_fixture(rotation, tilt)).unwrap();
+                let mut h = [0f32;12];
+                assert_eq!(unsafe { mc_engine_transform(&mut engine, 500000, h.as_mut_ptr(), h.len()) }, 0);
+                // Native output->input warp must remove the tilt while leaving the
+                // quarter-turn display transform to Swift. Zero tilt means identity.
+                let c = tilt.to_radians().cos(); let s = tilt.to_radians().sin();
+                for (actual, expected) in [(h[0],c), (h[1],s), (h[4],-s), (h[5],c)] {
+                    assert!((actual as f64/h[10] as f64-expected).abs() < 1e-5,
+                        "rotation={rotation}, tilt={tilt}, warp={h:?}");
+                }
+            }
+        }
+    }
+    #[test]
+    fn gravity_missing_or_shifted_is_rejected_without_silent_gyro_fallback() {
+        let mut missing = fixture(); missing.options.horizon_lock = true;
+        assert!(create(missing).is_err());
+        let mut late = gravity_fixture(90, 0.);
+        late.gravity.retain(|g| g.timestamp_ms > 0.);
+        assert!(create(late).is_err());
+        let mut zero = gravity_fixture(90, 0.);
+        zero.gravity[10].gravity = [0.,0.,0.];
+        assert!(create(zero).is_err());
+        let mut disabled = gravity_fixture(90, 20.);
+        disabled.options.horizon_lock = false;
+        let engine = create(disabled).unwrap();
+        assert!(engine.manager.gyro.read().smoothed_quaternions.values().all(|q| q.angle() < 1e-7));
+    }
+    #[test]
+    fn looking_along_gravity_does_not_invent_a_roll_reference() {
+        let mut config = gravity_fixture(90, 0.);
+        for g in &mut config.gravity { g.gravity = [0.,0.,-1.]; }
+        let engine = create(config).unwrap();
+        assert!(engine.manager.gyro.read().smoothed_quaternions.values().all(|q| q.angle() < 1e-7));
+    }
+    #[test]
+    fn extended_smoothing_reduces_slow_virtual_camera_motion() {
+        let motion = |seconds: f64| {
+            let mut config = fixture();
+            config.duration_ms = 20000.;
+            config.frames = (0..600).map(|i| Frame { timestamp_us: i*33333, k: [500.,0.,320.,0.,510.,180.,0.,0.,1.] }).collect();
+            config.gyro = (-5..2010).map(|i| Gyro { timestamp_ms: i as f64*10., gyro: [0., 0.08*(i as f64/300.).sin(), 0.] }).collect();
+            config.options.smoothing_seconds = Some(seconds);
+            config.options.allow_black_borders = true;
+            let engine = create(config).unwrap();
+            assert_eq!(engine.report.effective_smoothing_seconds, seconds);
+            let gyro = engine.manager.gyro.read();
+            let path: Vec<_> = gyro.smoothed_quaternions.range(3_000_000..17_000_000)
+                .map(|(t, correction)| gyro.quaternions[t] * correction.inverse()).collect();
+            path.windows(2).map(|p| p[0].angle_to(&p[1])).sum::<f64>()
+        };
+        let four = motion(4.); let six = motion(6.); let ten = motion(10.);
+        println!("virtual camera angular travel, 4s={four:.6}, 6s={six:.6}, 10s={ten:.6}");
+        assert!(ten < six && six < four);
+    }
+    #[test]
+    fn crop_limit_reports_reduction_and_stability_priority_keeps_strength() {
+        for allow in [false, true] {
+            let mut config = fixture();
+            config.options.smoothing_seconds = Some(4.);
+            config.options.max_crop = 1.2;
+            config.options.allow_black_borders = allow;
+            for sample in &mut config.gyro { sample.gyro = [0.,0.,(sample.timestamp_ms/100.).sin()*2.]; }
+            let engine = create(config).unwrap();
+            let r = engine.report;
+            assert_eq!(r.requested_smoothing_seconds, 4.);
+            if allow { assert_eq!(r.effective_smoothing_seconds, 4.); }
+            else { assert!(r.effective_smoothing_seconds < 4.); }
+            assert!(r.maximum_crop <= 1.2 + 1e-9 && r.minimum_crop >= 1.);
+        }
     }
     #[test]
     fn per_frame_intrinsics_follow_zoom() {

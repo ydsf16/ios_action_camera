@@ -6,7 +6,14 @@
 extern "C" {
 #endif
 typedef struct Engine MCGyroflowEngine;
+typedef struct {
+    double requested_smoothing_seconds;
+    double effective_smoothing_seconds;
+    double minimum_crop;
+    double maximum_crop;
+} MCStabilizationReport;
 MCGyroflowEngine *mc_engine_create(const char *json, char *error, size_t capacity);
+int32_t mc_engine_report(const MCGyroflowEngine *engine, MCStabilizationReport *report);
 int32_t mc_engine_process(MCGyroflowEngine *engine, int64_t timestamp_us,
     uint8_t *input, size_t input_len, size_t input_stride,
     uint8_t *output, size_t output_len, size_t output_stride,

@@ -4,6 +4,7 @@ import Foundation
 public struct StabilizationInput: Codable {
     public struct Frame: Codable { public let timestamp_us: Int64; public let k: [Double] }
     public struct Gyro: Codable { public let timestamp_ms: Double; public let gyro: [Double] }
+    public struct Gravity: Codable { public let timestamp_ms: Double; public let gravity: [Double] }
     public var options = StabilizationOptions()
     public let width: Int
     public let height: Int
@@ -13,6 +14,8 @@ public struct StabilizationInput: Codable {
     public let fps: Double
     public let frames: [Frame]
     public let gyro: [Gyro]
+    public let gravity: [Gravity]
+    public let display_rotation_degrees: Int
 
     public static func load(directory: URL, options: StabilizationOptions = .init()) throws -> Self {
         guard options.isValid else { throw InputError("稳定参数无效。") }
@@ -48,6 +51,28 @@ public struct StabilizationInput: Codable {
         }
         guard zip(times,times.dropFirst()).allSatisfy({ $0.1-$0.0 < 0.1 }) else { throw InputError("IMU 有较大的采样缺口。") }
         let gx = try motion.column("gx_rad_s"), gy = try motion.column("gy_rad_s"), gz = try motion.column("gz_rad_s")
+        var gravity: [Gravity] = []
+        if options.horizonLock {
+            let url = directory.appendingPathComponent("gravity.csv")
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                throw InputError("此素材缺少重力数据，请关闭重力水平锁定后再处理。")
+            }
+            let table = try NumericCSV(url)
+            let timestamps = try table.column("host_sec")
+            guard timestamps.count > 2, increasing(timestamps), timestamps[0] <= host[0], timestamps.last! >= host.last!,
+                  zip(timestamps,timestamps.dropFirst()).allSatisfy({ $0.1-$0.0 < 0.1 }) else {
+                throw InputError("重力数据未完整覆盖视频，或存在采样缺口。请关闭重力水平锁定后再处理。")
+            }
+            let x = try table.column("gx_g"), y = try table.column("gy_g"), z = try table.column("gz_g")
+            guard timestamps.indices.allSatisfy({ (0.5...1.5).contains(sqrt(x[$0]*x[$0]+y[$0]*y[$0]+z[$0]*z[$0])) }) else {
+                throw InputError("重力向量无效，请关闭重力水平锁定后再处理。")
+            }
+            // Same recorded clock map as gyro. Do not zip asynchronous sample rows,
+            // rotate by the display orientation, negate, or re-zero the gravity stream.
+            gravity = timestamps.indices.map { Gravity(timestamp_ms: map.videoSeconds(for: timestamps[$0])*1000,
+                                                       gravity: [x[$0],y[$0],z[$0]]) }
+            guard [0,90,180,270].contains(manifest.displayRotationDegrees) else { throw InputError("录像方向无效，无法锁定水平。") }
+        }
         let width = manifest.width, height = manifest.height
         guard width >= 1280, width <= 4096, height > 0, height <= 4096,
               width.isMultiple(of: 2), height.isMultiple(of: 2) else { throw InputError("录制尺寸暂不支持。") }
@@ -57,7 +82,8 @@ public struct StabilizationInput: Codable {
         return Self(options: options, width: width, height: height, output_width: outWidth, output_height: outHeight,
             duration_ms: manifest.durationSeconds * 1000, fps: Double(manifest.requestedFPS),
             frames: video.indices.map { Frame(timestamp_us: Int64((video[$0]*1e6).rounded()), k: matrices[$0]) },
-            gyro: times.indices.map { Gyro(timestamp_ms: map.videoSeconds(for: times[$0])*1000, gyro: [gx[$0],gy[$0],gz[$0]]) })
+            gyro: times.indices.map { Gyro(timestamp_ms: map.videoSeconds(for: times[$0])*1000, gyro: [gx[$0],gy[$0],gz[$0]]) },
+            gravity: gravity, display_rotation_degrees: manifest.displayRotationDegrees)
     }
     private static func increasing(_ values: [Double]) -> Bool {
         !values.isEmpty && zip(values,values.dropFirst()).allSatisfy { $0.1 > $0.0 }
