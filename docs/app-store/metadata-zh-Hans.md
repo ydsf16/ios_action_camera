@@ -1,4 +1,4 @@
-# RoamShot 1.0.0 商店资料草稿
+# RoamShot 1.0.0 商店资料
 
 名称：RoamShot
 副标题：运动拍摄，轻松稳定
@@ -11,6 +11,14 @@
 内购名称：RoamShot Pro 永久解锁
 内购描述：一次购买，永久解锁超过 1 分钟的连续录制。
 中国区价格：¥20（已在 App Store Connect 保存并复查）
+首发地区：中国大陆
+版权：2026 Xiaocong Jiang（沿用 Sensor Recorder Pro）
+审核联系人：沿用同账号 Sensor Recorder Pro 的现有资料，已填写到 App Store Connect；不提交私人联系字段到公开仓库。
+发布方式：审核通过后自动发布；最终提交审核由用户操作。
+
+## 推广文本
+
+出发去拍，回来再选喜欢的稳定效果。自然、标准、强力三档，支持重力水平锁定与 2.8K 输出。每段 1 分钟免费拍摄，不限次数；一次买断，解锁长时间连续录制。
 
 ## 描述
 
@@ -29,7 +37,7 @@ RoamShot 同步记录视频与运动数据，在手机上生成稳定画面。�
 
 录制规格和镜头切换取决于设备支持。较强的稳定可能需要更多裁切；运动模糊、暗光和镜头切换会影响画质。长视频需要足够存储和处理时间。
 
-## 审核备注草稿（英文）
+## 审核备注（英文）
 
 No app login is required. Camera, microphone and motion permissions are required for capture. Photos add-only permission is requested only when saving a movie.
 
@@ -37,10 +45,12 @@ The non-consumable IAP unlocks continuous recordings longer than 60 seconds. Fre
 
 The app stabilizes its own recordings using synchronized motion data on-device. No cloud processing or separate user account is used. The app includes GPLv3 code with an App Store exception; matching source and license information are linked in Settings.
 
+The first App Store screenshot uses AI-generated scenery solely as illustrative sample media within the actual playback UI. It is labeled and is not a before/after stabilization-quality comparison.
+
 ## 提交前仍需核验
 
 - 账户持有人处理待更新协议；App 记录 6811549990 已创建，Bundle ID com.grape.RoamShot，云管理 Apple Distribution 签名导出成功。
 - 本地 StoreKit 购买与退款自动撤权已验证。StoreKitTest 自动会话受运行时配置错误影响；完整恢复、待批准和 App Store sandbox 仍需验收。内购记录 6811551799，价格 ¥20 已确认。
 - 真机 4K60 录满一分钟自动停止、正常封装、IMU 时钟及稳定导出。
 - 支持与隐私链接公开可访问；对应源代码已发布。
-- 真实应用截图、审核联系人、年龄分级、地区与可能需要的地区资料。
+- 四张商店图、审核联系人和版权已准备；年龄 4+，隐私声明未收集数据，首发中国大陆。App 1.0.0（26）与永久解锁内购组成同一审核草稿；最终提交由用户操作。
