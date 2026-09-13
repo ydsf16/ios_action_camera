@@ -9,6 +9,8 @@ final class StabilizationOptionsTests: XCTestCase {
             XCTAssertEqual(value.smoothingSeconds, 0.16 * pow(25, legacy), accuracy: 1e-12)
             XCTAssertEqual(value.zoomTransitionSeconds, 2)
             XCTAssertFalse(value.horizonLock)
+            XCTAssertFalse(value.automaticAdjustment)
+            XCTAssertNil(value.preset)
             let encoded = try JSONEncoder().encode(value)
             XCTAssertEqual(try JSONDecoder().decode(StabilizationOptions.self, from: encoded), value)
             let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
@@ -17,6 +19,62 @@ final class StabilizationOptionsTests: XCTestCase {
         }
         let bad = Data("{\"strength\":1.1,\"maxCrop\":2,\"dynamicCrop\":true,\"allowBlackBorders\":false}".utf8)
         XCTAssertThrowsError(try JSONDecoder().decode(StabilizationOptions.self, from: bad))
+    }
+
+    func testPresetsResetOnlyStabilizationAndPreserveHorizonAndExportChoice() throws {
+        var value = StabilizationOptions()
+        XCTAssertEqual(value.preset, .standard)
+        value.horizonLock = true; value.exportResolution = .fullHD
+        value.allowBlackBorders = true; value.dynamicCrop = false; value.automaticAdjustment = false
+        for preset in StabilizationPreset.allCases {
+            value.applyPreset(preset)
+            XCTAssertEqual(value.preset, preset)
+            XCTAssertTrue(value.automaticAdjustment)
+            XCTAssertTrue(value.horizonLock)
+            XCTAssertEqual(value.exportResolution, .fullHD)
+            XCTAssertEqual(try JSONDecoder().decode(StabilizationOptions.self, from: JSONEncoder().encode(value)), value)
+        }
+        XCTAssertEqual(value.recommended().preset, .standard)
+        value.automaticAdjustment = false
+        XCTAssertNil(value.preset)
+    }
+
+    func testOutputDefaultUpgradePreservesEffectAndSubsequentSizeChoices() throws {
+        let suite = "RoamShot-output-default-test-" + UUID().uuidString
+        let storage = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { storage.removePersistentDomain(forName: suite) }
+        var previous = StabilizationOptions()
+        previous.exportResolution = .fullHD
+        previous.applyPreset(.strong)
+        previous.horizonLock = true
+        let previousData = try JSONEncoder().encode(previous)
+        storage.set(previousData, forKey: "stabilizationDefaults")
+        CaptureFormat.standard.save(defaults: storage)
+
+        let migrated = StabilizationOptions.defaults(storage: storage)
+        var expected = previous
+        expected.exportResolution = .action2_8K
+        XCTAssertEqual(migrated, expected)
+        XCTAssertEqual(CaptureFormat.load(defaults: storage), CaptureFormat(resolution: .uhd4K, fps: 60))
+        // Existing clips/receipts still decode their actual original output choice.
+        XCTAssertEqual(try JSONDecoder().decode(StabilizationOptions.self, from: previousData), previous)
+        XCTAssertEqual(StabilizationOptions.defaults(storage: storage), expected)
+
+        try previous.saveDefaults(storage: storage)
+        XCTAssertEqual(StabilizationOptions.defaults(storage: storage), previous)
+    }
+
+    func testAdaptationReportsHorizonReductionAndNeverLabelsZeroCorrectionAsStable() throws {
+        let report = StabilizationReport(requestedSmoothingSeconds: 3, effectiveSmoothingSeconds: 0,
+            minimumCrop: 1, maximumCrop: 2, requestedHorizonPercent: 100, effectiveHorizonPercent: 0)
+        XCTAssertTrue(report.horizonReduced)
+        XCTAssertTrue(report.unstabilizedFallback)
+        XCTAssertTrue(report.summary.contains("仅调整画幅"))
+        XCTAssertTrue(report.details.contains("未能提供稳定效果"))
+        let old = Data("{\"requestedSmoothingSeconds\":0.8,\"effectiveSmoothingSeconds\":0.8,\"minimumCrop\":1,\"maximumCrop\":2}".utf8)
+        let legacy = try JSONDecoder().decode(StabilizationReport.self, from: old)
+        XCTAssertFalse(legacy.horizonReduced)
+        XCTAssertFalse(legacy.unstabilizedFallback)
     }
 
     func testOffAndExtendedStrengthSurvivePersistence() throws {

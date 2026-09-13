@@ -12,6 +12,7 @@ extension MediaTime {
 }
 
 final class RecordingWriter {
+    let maximumDuration: Double?
     let directory: URL
     private(set) var manifest: RecordingManifest
     private let frames: CSVFile
@@ -31,12 +32,13 @@ final class RecordingWriter {
     private var errorMessage: String?
     private var csvClosed = false
 
-    init(root: URL, device: AVCaptureDevice, connection: AVCaptureConnection, rotationDegrees: Int, exposurePolicy: String, captureFormat: CaptureFormat) throws {
+    init(root: URL, device: AVCaptureDevice, connection: AVCaptureConnection, rotationDegrees: Int, exposurePolicy: String, captureFormat: CaptureFormat, maximumDuration: Double? = nil) throws {
+        self.maximumDuration = maximumDuration
         let date = Date()
         let format = DateFormatter()
         format.locale = Locale(identifier: "en_US_POSIX")
         format.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        let id = "MC_\(format.string(from: date))_\(UUID().uuidString.prefix(8))"
+        let id = "RS_\(format.string(from: date))_\(UUID().uuidString.prefix(8))"
         directory = root.appendingPathComponent(id, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let size = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
@@ -57,6 +59,7 @@ final class RecordingWriter {
         manifest.zoomDisplayMultiplier = CaptureService.zoomConfiguration(device).multiplier
         manifest.cameraObservationSource = "zoom_observed and camera_index_observed are device properties sampled at callback, not frame-exact. K is attached to the actual sample buffer."
         manifest.requestedFPS = captureFormat.fps
+        manifest.recordingLimitSeconds = maximumDuration
         manifest.appBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
         manifest.captureBufferStrategy = captureFormat.fps >= 60 ? "metal_nv12_owned_pool_8" : "camera_buffers_direct"
         let maximumExposure = device.activeMaxExposureDuration.seconds
@@ -128,6 +131,15 @@ final class RecordingWriter {
         started = true
     }
 
+    /// Limits are measured on the same video PTS timeline as the saved movie.
+    /// This runs before encoding; neither timestamps nor IMU axes are rewritten.
+    func reachedLimit(before sample: CMSampleBuffer) -> Bool {
+        guard let maximumDuration, let first = manifest.firstVideoPTS else { return false }
+        let origin = CMTime(value: first.value, timescale: first.timescale)
+        return CMTimeCompare(CMSampleBufferGetPresentationTimeStamp(sample),
+                             CMTimeAdd(origin, CMTime(seconds: maximumDuration, preferredTimescale: 1_000_000))) >= 0
+    }
+
     func appendVideo(_ sample: CMSampleBuffer, device: AVCaptureDevice,
                      connection: AVCaptureConnection, clock: CMClock?) throws {
         let pts = CMSampleBufferGetPresentationTimeStamp(sample)
@@ -165,6 +177,12 @@ final class RecordingWriter {
         let validDuration = duration.isNumeric && duration.seconds > 0 ? duration : CMTime(value: 1, timescale: CMTimeScale(manifest.requestedFPS))
         lastVideoEnd = CMTimeAdd(pts, validDuration)
         manifest.durationSeconds = relative + validDuration.seconds
+        if let maximumDuration, let first = manifest.firstVideoPTS {
+            let end = CMTimeAdd(CMTime(value: first.value, timescale: first.timescale),
+                                CMTime(seconds: maximumDuration, preferredTimescale: 1_000_000))
+            lastVideoEnd = CMTimeMinimum(lastVideoEnd!, end)
+            manifest.durationSeconds = min(manifest.durationSeconds, maximumDuration)
+        }
     }
 
     func appendAudio(_ sample: CMSampleBuffer, clock: CMClock?) throws {

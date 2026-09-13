@@ -91,7 +91,7 @@ struct ClipPreviewView: View {
             if hasStable {
                 Picker("视频版本", selection: Binding(get: { showOriginal }, set: { value in showOriginal = value; replacePlayer(); saved = false })) {
                     Text("原片").tag(true)
-                    Text("稳定").tag(false)
+                    Text(stabilizationReport?.unstabilizedFallback == true ? "处理结果" : "稳定").tag(false)
                 }.pickerStyle(.segmented).frame(maxWidth: 200).disabled(saving || library.deleting)
                 .accessibilityIdentifier("videoVersion")
             } else { Text("原片").font(.subheadline.weight(.semibold)) }
@@ -109,9 +109,9 @@ struct ClipPreviewView: View {
     private var playbackControls: some View {
         VStack(spacing: 12) {
             processingStatus
-            if !busy, !showOriginal, hasStable, let stabilizationReport, stabilizationReport.cropLimited {
-                Button { player?.pause(); showAdjustment = true } label: {
-                    Label("已受裁切限制 · 调整", systemImage: "exclamationmark.circle")
+            if !busy, !showOriginal, hasStable, let stabilizationReport, stabilizationReport.adjusted {
+                Button { message = stabilizationReport.details } label: {
+                    Label(stabilizationReport.summary + " · 详情", systemImage: "info.circle")
                         .font(.footnote).foregroundStyle(.yellow)
                 }.disabled(saving)
             }
@@ -137,13 +137,15 @@ struct ClipPreviewView: View {
                     Button { player?.pause(); showAdjustment = true } label: {
                         Label("调整", systemImage: "slider.horizontal.3").frame(minWidth: 64, minHeight: 32)
                     }.buttonStyle(.bordered).tint(AppTheme.accent).disabled(busy || saving)
-                    Button { Task { await saveToPhotos() } } label: {
+                    Button {
+                        Task { await saveToPhotos() }
+                    } label: {
                         HStack(spacing: 8) {
                             if saving { ProgressView().tint(AppTheme.accent) }
                             else { Image(systemName: saved ? "checkmark" : "square.and.arrow.up") }
-                            Text(saving ? "正在导出…" : saved ? "已保存到相册" : hasStable && !showOriginal ? "导出稳定视频" : "导出原片")
+                            Text(saving ? "正在导出…" : saved ? "已保存 · 再次导出" : hasStable && !showOriginal ? "导出视频" : "导出原片")
                         }.font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 32)
-                    }.buttonStyle(PrimaryActionStyle(color: saved ? AppTheme.success : AppTheme.accent, completed: saved)).disabled(saving || saved || busy)
+                    }.buttonStyle(PrimaryActionStyle(color: saved ? AppTheme.success : AppTheme.accent, completed: saved)).disabled(saving || busy)
                     .accessibilityIdentifier("exportVideo")
                 }
             }
@@ -162,11 +164,22 @@ struct ClipPreviewView: View {
                     Button("取消") { jobs.cancel(clip.directory) }.font(.footnote)
                 }
             case let .failed(error):
-                HStack {
-                    Label("处理未完成", systemImage: "exclamationmark.circle").foregroundStyle(.yellow)
-                    Button("详情") { message = error }
-                    Spacer()
-                    Button("重试") { jobs.enqueue(clip.directory, force: true) }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Label(hasStable ? "本次未完成，上一版仍可用" : "处理未完成，原片已保留", systemImage: "exclamationmark.circle").foregroundStyle(.yellow)
+                        Spacer()
+                        Button("详情") { message = error }
+                    }
+                    HStack {
+                        if jobs.parameterConflicts.contains(clip.id) {
+                            Button("使用推荐设置重新生成") {
+                                let options = StabilizationOptions.load(directory: clip.directory).recommended()
+                                jobs.enqueue(clip.directory, options: options, force: true)
+                            }
+                        }
+                        Spacer()
+                        Button("重试原设置") { jobs.enqueue(clip.directory, force: true) }
+                    }.disabled(saving)
                 }.font(.footnote)
             default:
                 if !hasStable { Button("生成稳定视频") { jobs.enqueue(clip.directory) }.font(.footnote) }
@@ -202,13 +215,14 @@ struct ClipPreviewView: View {
         }
     }
     @MainActor private func saveToPhotos() async {
-        guard !saving, !saved, !busy, !library.deleting, clip.canPlay else { return }
+        guard !saving, !busy, !library.deleting, clip.canPlay else { return }
         let source = playbackURL
-        saving = true; player?.pause()
+        saving = true; saved = false; player?.pause()
         defer { saving = false }
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else { message = "请在系统设置中允许添加照片。视频仍保存在本机。"; return }
         do {
+            // Save the visible file unchanged; size is chosen before stabilization.
             try await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: source) }
             saved = true
         } catch { message = error.localizedDescription }
@@ -227,7 +241,7 @@ private struct ClipInfoView: View {
                     LabeledContent("拍摄时间", value: clip.manifest.createdAt.formatted(date: .abbreviated, time: .shortened))
                     LabeledContent("时长", value: MediaText.duration(clip.manifest.durationSeconds))
                     LabeledContent("原片", value: "\(clip.manifest.width) × \(clip.manifest.height) · \(clip.manifest.requestedFPS) fps")
-                    LabeledContent("稳定视频", value: output)
+                    LabeledContent("生成结果", value: output)
                     LabeledContent("本机占用", value: "约 \(MediaText.storage(bytes ?? clip.allocatedBytes))")
                 }.listRowBackground(AppTheme.surface)
                 Section {

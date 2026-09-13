@@ -11,6 +11,8 @@ typedef struct {
     double effective_smoothing_seconds;
     double minimum_crop;
     double maximum_crop;
+    double requested_horizon_percent;
+    double effective_horizon_percent;
 } MCStabilizationReport;
 MCGyroflowEngine *mc_engine_create(const char *json, char *error, size_t capacity);
 int32_t mc_engine_report(const MCGyroflowEngine *engine, MCStabilizationReport *report);

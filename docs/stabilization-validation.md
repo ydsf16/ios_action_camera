@@ -10,7 +10,7 @@
 - iOS arm64 与 Simulator arm64 静态核心构建成功；App iOS 签名 Debug / Simulator Debug 编译成功。
 - 在 iPhone 17 Pro / iOS 26.3 模拟器，实际点击素材中的「生成稳定视频」，观察进度与稳定预览，再点击保存，界面确认「已保存到相册」。
 - 合成输入为 2 秒、1920×1080、30 fps 彩色运动测试图和 440 Hz AAC 音频。输出 60 帧，起始 PTS 为 0，视频与声音时长均为 2 秒。95 个音频包的内容哈希逐包一致，原片 SHA-256 未变化。
-- Mac 核心另处理了既有 SensorRecorder 实拍中的 180 帧，4K 输入、1080p 输出，检查导出的实际图像。此为核心像素通路检查，不代表当前 MotionCam 实拍同步、效果或 iPhone 性能验收。
+- Mac 核心另处理了既有 SensorRecorder 实拍中的 180 帧，4K 输入、1080p 输出，检查导出的实际图像。此为核心像素通路检查，不代表当前 RoamShot 实拍同步、效果或 iPhone 性能验收。
 
 ## 已知限制
 
@@ -18,7 +18,7 @@
 - 自动排队只在前台运行；拍摄暂停处理，后台取消当前任务，用户可重试。初始化阶段和单帧计算不能立即抢占。
 - 使用 Plain 3D 平滑和动态缩放，过大裁切尝试降低平滑强度，仍过大则报错保留原片。该策略不是严格无黑边保证，也未完成极端运动验收。
 - 逐帧 K 已接入；残余畸变取零且未标定。滚动快门和地平线锁定关闭，当前不用加速度／重力参与姿态融合。
-- 本轮 iPhone 连接反复中断。最后成功列出 3 段 MotionCam 录制目录，但紧接着复制素材和安装新版均失败，CoreDevice 报 1011（找不到设备）；未取得当前 MotionCam 真机录制包，也未安装此版本到手机。
+- 本轮 iPhone 连接反复中断。最后成功列出 3 段 RoamShot 录制目录，但紧接着复制素材和安装新版均失败，CoreDevice 报 1011（找不到设备）；未取得当前 RoamShot 真机录制包，也未安装此版本到手机。
 
 ## 重现模拟器导出
 
@@ -26,7 +26,7 @@
 
 ```sh
 python3 scripts/make_export_fixture.py /tmp/MC_Synthetic_Export_Test
-# 用 xcrun simctl get_app_container <Simulator-UUID> com.grape.MotionCam data
+# 用 xcrun simctl get_app_container <Simulator-UUID> com.grape.RoamShot data
 # 得到 App 数据目录，将整个 MC_Synthetic_Export_Test 复制到 Documents/Recordings。
 ```
 
@@ -43,11 +43,11 @@ python3 scripts/make_export_fixture.py /tmp/MC_Synthetic_Export_Test
 
 ## 0.2.1 启动修复（2026-09-12）
 
-真机反馈打开卡住，Xcode 显示 dyld SIGABRT：`-lmotioncam_gyroflow` 优先选中了 Cargo 同目录下的 dylib，App 引用了开发机绝对路径。此前「启动命令成功」不代表进程正常运行，模拟器能访问开发机文件也掩盖了缺陷。
+真机反馈打开卡住，Xcode 显示 dyld SIGABRT：`-lroamshot_gyroflow` 优先选中了 Cargo 同目录下的 dylib，App 引用了开发机绝对路径。此前「启动命令成功」不代表进程正常运行，模拟器能访问开发机文件也掩盖了缺陷。
 
 现已改用 SDK 对应的 `.a` 完整路径强制静态链接。iOS 签名 Debug 与 Simulator Debug 编译通过，两个成品的 Mach-O 依赖检查通过；检查器也确认能拒绝原来的动态库。0.2.1（build 3）已安装到 iPhone 16 并启动，随后进程仍存在，镜像中可见拍摄界面。镜像提示不支持访问 iPhone 相机，已退出镜像；本机拍摄和处理效果仍需继续真机验收。
 
-此轮已成功读取旧 MotionCam 包：104 帧、104 帧内参、407 个陀螺仪样本、无丢帧、IMU 完整覆盖；录制审计无错误无警告，稳定输入适配检查通过。
+此轮已成功读取旧 RoamShot 包：104 帧、104 帧内参、407 个陀螺仪样本、无丢帧、IMU 完整覆盖；录制审计无错误无警告，稳定输入适配检查通过。
 
 ## 0.2.2 音视频写入等待修复（2026-09-12）
 

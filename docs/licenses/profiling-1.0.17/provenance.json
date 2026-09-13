@@ -1,0 +1,16 @@
+{
+  "package": "profiling",
+  "version": "1.0.17",
+  "repo": "https://github.com/aclysma/profiling",
+  "ref": "740d74c82212f1f0584cfa5c6d884c5ab5367101",
+  "files": [
+    {
+      "name": "LICENSE-APACHE",
+      "url": "https://raw.githubusercontent.com/aclysma/profiling/740d74c82212f1f0584cfa5c6d884c5ab5367101/LICENSE-APACHE"
+    },
+    {
+      "name": "LICENSE-MIT",
+      "url": "https://raw.githubusercontent.com/aclysma/profiling/740d74c82212f1f0584cfa5c6d884c5ab5367101/LICENSE-MIT"
+    }
+  ]
+}

@@ -153,11 +153,11 @@ private struct ClipTile: View {
         switch jobs.states[clip.id] {
         case .queued: return ("等待处理", "clock", false)
         case let .processing(value): return ("\(Int(min(1, max(0, value)) * 100))%", "circle.dotted", false)
-        case .ready: return ("已稳定", "checkmark", false)
+        case .ready: return ("已处理", "checkmark", false)
         case .failed: return ("待重试", "arrow.clockwise", true)
         default:
             return FileManager.default.fileExists(atPath: clip.directory.appendingPathComponent(StabilizationProcessor.filename).path)
-                ? ("已稳定", "checkmark", false) : ("原片", "video", false)
+                ? ("已处理", "checkmark", false) : ("原片", "video", false)
         }
     }
     var body: some View {

@@ -3,6 +3,9 @@ import Metal
 @main struct Benchmark {
     static func main() async {
         do {
+            if let index = CommandLine.arguments.firstIndex(of: "--adaptive-test"), index+1 < CommandLine.arguments.count {
+                try await AdaptiveStabilizationValidation.run(fixture: URL(fileURLWithPath: CommandLine.arguments[index+1])); return
+            }
             if CommandLine.arguments.contains("--self-test") { try MetalPixelValidation.run(); return }
             if CommandLine.arguments.contains("--horizon-pixel-test") { try HorizonPixelValidation.run(); return }
             if let index = CommandLine.arguments.firstIndex(of: "--parameter-test"), index+1 < CommandLine.arguments.count {

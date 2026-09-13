@@ -47,6 +47,7 @@ public struct RecordingManifest: Codable, Sendable {
     public var status = "recording"
     public var appVersion: String
     public var appBuild: String?
+    public var recordingLimitSeconds: Double?
     public var deviceModel: String
     public var systemVersion: String
     public var camera: String

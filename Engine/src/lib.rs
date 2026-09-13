@@ -19,10 +19,11 @@ struct Options {
     max_crop: f64, dynamic_crop: bool, allow_black_borders: bool,
     zoom_transition_seconds: f64,
     horizon_lock: bool,
+    automatic_adjustment: bool,
 }
 impl Default for Options {
     fn default() -> Self { Self { strength: 0.5, smoothing_seconds: None, max_crop: 2.0,
-        dynamic_crop: true, allow_black_borders: false, zoom_transition_seconds: 2.0, horizon_lock: false } }
+        dynamic_crop: true, allow_black_borders: false, zoom_transition_seconds: 2.0, horizon_lock: false, automatic_adjustment: false } }
 }
 #[derive(Deserialize)]
 struct Config {
@@ -39,6 +40,7 @@ fn default_gpu() -> bool { true }
 pub struct StabilizationReport {
     requested_smoothing_seconds: f64, effective_smoothing_seconds: f64,
     minimum_crop: f64, maximum_crop: f64,
+    requested_horizon_percent: f64, effective_horizon_percent: f64,
 }
 pub struct Engine { transforms: gyroflow_core::stabilization::ComputeParams, use_gpu: bool, manager: StabilizationManager, width: usize, height: usize, ow: usize, oh: usize, report: StabilizationReport }
 
@@ -53,6 +55,18 @@ fn gravity_lock_amount(g: &nalgebra::Vector3<f64>) -> f64 {
     // Roll is undefined when looking along gravity. Fade out before that singularity.
     let t = ((g.x.hypot(g.y) - 0.05) / 0.15).clamp(0.0, 1.0);
     100.0 * t*t * (3.0 - 2.0*t)
+}
+
+fn configure_horizon(manager: &StabilizationManager, config: &Config, amount: f64) {
+    manager.set_horizon_lock(amount, if config.options.horizon_lock { -f64::from(config.display_rotation_degrees) } else { 0.0 });
+    let mut keyframes = manager.keyframes.write();
+    keyframes.clear_type(&gyroflow_core::keyframes::KeyframeType::LockHorizonAmount);
+    if amount > 0.0 && config.gravity.iter().any(|g| gravity_lock_amount(&image_gravity(g.gravity)) < 100.0) {
+        for g in &config.gravity {
+            keyframes.set(&gyroflow_core::keyframes::KeyframeType::LockHorizonAmount,
+                (g.timestamp_ms*1000.0).round() as i64, gravity_lock_amount(&image_gravity(g.gravity)) * amount / 100.0);
+        }
+    }
 }
 
 fn create(config: Config) -> Result<Engine, String> {
@@ -93,10 +107,10 @@ fn create(config: Config) -> Result<Engine, String> {
     manager.init_from_video_data(config.duration_ms, config.fps, frame_count, (config.width, config.height));
     let k = config.frames[config.frames.len()/2].k;
     let lens = serde_json::json!({
-        "name":"MotionCam recorded intrinsics (distortion uncalibrated)",
+        "name":"RoamShot recorded intrinsics (distortion uncalibrated)",
         "calib_dimension":{"w":config.width,"h":config.height},
         "orig_dimension":{"w":config.width,"h":config.height},
-        "calibrator_version":"MotionCam-recorded-intrinsics-v1","camera_brand":"Apple","fps":config.fps,"input_horizontal_stretch":1.0,"input_vertical_stretch":1.0,
+        "calibrator_version":"RoamShot-recorded-intrinsics-v1","camera_brand":"Apple","fps":config.fps,"input_horizontal_stretch":1.0,"input_vertical_stretch":1.0,
         "distortion_model":"opencv_standard",
         "fisheye_params":{"camera_matrix":[[k[0],k[1],k[2]],[k[3],k[4],k[5]],[k[6],k[7],k[8]]],"distortion_coeffs":[0,0,0,0,0,0,0,0]}
     });
@@ -104,7 +118,7 @@ fn create(config: Config) -> Result<Engine, String> {
     let mut metadata = FileMetadata::default();
     metadata.imu_orientation = Some("XYZ".into());
     metadata.has_accurate_timestamps = true;
-    metadata.detected_source = Some("MotionCam".into());
+    metadata.detected_source = Some("RoamShot".into());
     // Gyroflow internal IMUData expects degrees/s. Convert here, not in the recording.
     metadata.raw_imu = config.gyro.iter().map(|g| TimeIMU {
         timestamp_ms: g.timestamp_ms,
@@ -113,12 +127,6 @@ fn create(config: Config) -> Result<Engine, String> {
     if config.options.horizon_lock {
         let vectors: gyroflow_core::gyro_source::TimeVec = config.gravity.iter()
             .map(|g| ((g.timestamp_ms*1000.0).round() as i64, image_gravity(g.gravity))).collect();
-        if vectors.values().any(|g| gravity_lock_amount(g) < 100.0) {
-            let mut keyframes = manager.keyframes.write();
-            for (timestamp, g) in &vectors {
-                keyframes.set(&gyroflow_core::keyframes::KeyframeType::LockHorizonAmount, *timestamp, gravity_lock_amount(g));
-            }
-        }
         metadata.gravity_vectors = Some(vectors);
     }
     for frame in &config.frames {
@@ -140,16 +148,27 @@ fn create(config: Config) -> Result<Engine, String> {
     manager.set_background_color(nalgebra::Vector4::new(0.0,0.0,0.0,255.0));
     // The movie display transform is applied by Swift after native-pixel processing.
     // Offset the target horizon only; rotating the video here would rotate it twice.
-    manager.set_horizon_lock(if config.options.horizon_lock { 100.0 } else { 0.0 },
-        if config.options.horizon_lock { -f64::from(config.display_rotation_degrees) } else { 0.0 });
     manager.set_video_rotation(0.0); // Swift preserves the source track transform.
     let requested_tau = config.options.smoothing_seconds.unwrap_or_else(|| 0.16 * 25.0f64.powf(config.options.strength));
+    let requested_horizon = if config.options.horizon_lock { 100.0 } else { 0.0 };
     let limit = 1.0 / config.options.max_crop;
     let mut acceptable = false;
     let mut report = StabilizationReport { requested_smoothing_seconds: requested_tau,
-        effective_smoothing_seconds: requested_tau, minimum_crop: 1.0, maximum_crop: 1.0 };
-    for factor in [1.0, 0.5, 0.25, 0.1, 0.02] {
-        manager.set_smoothing_param("time_constant", requested_tau * factor);
+        effective_smoothing_seconds: requested_tau, minimum_crop: 1.0, maximum_crop: 1.0,
+        requested_horizon_percent: requested_horizon, effective_horizon_percent: requested_horizon };
+    // Fit the entire clip before opening codecs. Never encode trial videos.
+    // Manual settings retain the existing policy; automatic settings can also relax
+    // horizon lock, and explicitly report an unstabilized result at the final limit.
+    let candidates: &[(f64, f64)] = if config.options.automatic_adjustment {
+        &[(1.,1.), (0.5,1.), (0.25,1.), (0.25,0.5), (0.1,0.5), (0.1,0.25), (0.02,0.25), (0.02,0.), (0.005,0.), (0.,0.)]
+    } else { &[(1.,1.), (0.5,1.), (0.25,1.), (0.1,1.), (0.02,1.)] };
+    let mut previous_candidate = None;
+    for &(factor, horizon_factor) in candidates {
+        let candidate = (requested_tau * factor, requested_horizon * horizon_factor);
+        if previous_candidate == Some(candidate) { continue; }
+        previous_candidate = Some(candidate);
+        configure_horizon(&manager, &config, candidate.1);
+        manager.set_smoothing_param("time_constant", candidate.0);
         manager.recompute_blocking();
         let mut params = manager.params.write();
         if params.fovs.is_empty() || params.fovs.iter().any(|f| !f.is_finite() || *f <= 0.0) {
@@ -159,7 +178,8 @@ fn create(config: Config) -> Result<Engine, String> {
             for fov in &mut params.fovs {
                 *fov = if config.options.dynamic_crop { fov.clamp(limit, 1.0) } else { limit };
             }
-            report.effective_smoothing_seconds = requested_tau * factor;
+            report.effective_smoothing_seconds = candidate.0;
+            report.effective_horizon_percent = candidate.1;
             report.minimum_crop = params.fovs.iter().map(|f| 1.0/f).fold(f64::INFINITY, f64::min);
             report.maximum_crop = params.fovs.iter().map(|f| 1.0/f).fold(1.0, f64::max);
             acceptable = true; break;
@@ -359,6 +379,45 @@ mod tests {
         for g in &mut config.gravity { g.gravity = [0.,0.,-1.]; }
         let engine = create(config).unwrap();
         assert!(engine.manager.gyro.read().smoothed_quaternions.values().all(|q| q.angle() < 1e-7));
+    }
+    #[test]
+    fn automatic_policy_recovers_crop_horizon_conflicts_in_all_orientations() {
+        for rotation in [0,90,180,270] {
+            let mut manual = gravity_fixture(rotation, 45.);
+            manual.options.allow_black_borders = false;
+            manual.options.max_crop = 1.1;
+            assert!(create(manual).is_err());
+            let mut automatic = gravity_fixture(rotation, 45.);
+            automatic.options.allow_black_borders = false;
+            automatic.options.max_crop = 1.1;
+            automatic.options.automatic_adjustment = true;
+            let engine = create(automatic).unwrap();
+            assert!(engine.report.effective_horizon_percent < 100.);
+            assert_eq!(engine.report.requested_horizon_percent, 100.);
+            assert!(engine.report.maximum_crop <= 1.1 + 1e-9);
+        }
+    }
+    #[test]
+    fn automatic_policy_keeps_explicit_black_border_strength_and_crop() {
+        let mut config = gravity_fixture(90, 45.);
+        config.options.smoothing_seconds = Some(10.);
+        config.options.automatic_adjustment = true;
+        let engine = create(config).unwrap();
+        assert_eq!(engine.report.effective_smoothing_seconds, 10.);
+        assert_eq!(engine.report.effective_horizon_percent, 100.);
+        assert_eq!(engine.report.minimum_crop, 1.);
+        assert_eq!(engine.report.maximum_crop, 1.);
+    }
+    #[test]
+    fn automatic_policy_does_not_mask_invalid_sensor_data() {
+        let mut config = gravity_fixture(90, 45.);
+        config.options.automatic_adjustment = true;
+        config.gravity.clear();
+        assert!(create(config).is_err());
+        let mut config = fixture();
+        config.options.automatic_adjustment = true;
+        config.gyro[2].timestamp_ms = config.gyro[1].timestamp_ms;
+        assert!(create(config).is_err());
     }
     #[test]
     fn extended_smoothing_reduces_slow_virtual_camera_motion() {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only audit of MotionCam v1 data. Does not estimate or apply visual offset."""
+"""Read-only audit of RoamShot v1 data. Does not estimate or apply visual offset."""
 import argparse
 import csv
 import json

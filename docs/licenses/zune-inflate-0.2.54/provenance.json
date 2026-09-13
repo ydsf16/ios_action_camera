@@ -1,0 +1,16 @@
+{
+  "package": "zune-inflate",
+  "version": "0.2.54",
+  "repo": "https://github.com/etemesi254/zune-image",
+  "ref": "69502ce83fdfecdd0beefd677e2abb3781b29d98",
+  "files": [
+    {
+      "name": "LICENSE-ZLIB",
+      "url": "https://raw.githubusercontent.com/etemesi254/zune-image/69502ce83fdfecdd0beefd677e2abb3781b29d98/LICENSE-ZLIB"
+    },
+    {
+      "name": "LICENSE.md",
+      "url": "https://raw.githubusercontent.com/etemesi254/zune-image/69502ce83fdfecdd0beefd677e2abb3781b29d98/LICENSE.md"
+    }
+  ]
+}

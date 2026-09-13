@@ -1,0 +1,12 @@
+{
+  "package": "gpu-alloc",
+  "version": "0.6.0",
+  "repo": "https://github.com/zakarumych/gpu-alloc",
+  "ref": "84ca166ba69b95b69f36c2cb3b0160a6c4efa90a",
+  "files": [
+    {
+      "name": "COPYING",
+      "url": "https://raw.githubusercontent.com/zakarumych/gpu-alloc/84ca166ba69b95b69f36c2cb3b0160a6c4efa90a/COPYING"
+    }
+  ]
+}

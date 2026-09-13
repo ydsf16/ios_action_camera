@@ -1,8 +1,14 @@
-# MotionCam · iPhone 运动相机
+# RoamShot · iPhone 运动相机
+
+应用显示名称为 **RoamShot**，桌面图标使用青绿色镜头与运动轨迹符号。应用标识与现有安装保持一致，覆盖升级保留素材和设置。见[图标与改名验证](docs/design/roamshot/README.md)。
 
 首版交互：**拍摄 → 预览 → 保存**。支持调节稳定强度、裁切倍数、动态裁切、黑边与重力水平锁定。见[已确认 UI](docs/design/README.md)。
 
-## 当前版本：0.8.1（重力水平锁定）
+## 当前版本：0.10.1（RoamShot 名称与应用图标）
+
+拍摄预览支持**轻点选择对焦位置、长按对焦后锁定、再次轻点恢复连续自动对焦**；录制中也可操作。设置 → 拍摄辅助提供九宫格参考线，默认关闭并记住选择，只显示在预览中。自动切换物理镜头时恢复自动对焦并提示，固定对焦镜头提示不支持点按。曝光上限和视频／IMU 坐标约定保持不变。见[对焦与参考线验证](docs/focus-grid-validation.md)。
+
+普通页面提供 **自然／标准／强力** 与 **保持水平**；精确强度、裁切、黑边与缩放过渡放入“高级设置”。新设置默认使用标准效果，旧设置保留为自定义，选择预设后启用自动适配。自动模式在本段素材的裁切范围内协调平滑和水平锁定，并说明实际调整；手动组合无法满足时，生成前提供“一键使用推荐设置”。原片和上一版结果保留到新版本成功生成。在拍摄前的默认设置或素材的“调整”中选择输出分辨率，稳定处理一次生成目标尺寸。导出直接保存当前视频，不再选择尺寸或触发重新稳定。见[简单交互与适配验证](docs/simple-stabilization-validation.md)与[输出分辨率验证](docs/output-resolution-validation.md)。
 
 稳定参数新增独立的“重力水平锁定”开关，使用录制的 `CoreMotion.gravity`，默认关闭以保留原效果。锁定画面水平时仍可转向和俯仰，接近朝天／朝地时逐渐减弱锁定。支持四种录像方向，不改变原始 IMU、像素、内参或时钟映射；重力缺失或采样不完整时明确报错。未加入短片预览。见[重力锁定验证](docs/gravity-horizon-validation.md)。
 
@@ -12,12 +18,12 @@
 
 录制中可双指缩放、展开倍率滑条，或点击倍率按钮平滑变焦。兼容设备优先使用虚拟相机，由系统选择超广角／广角／长焦；倍率按系统显示口径换算，本版最高提供 5×。保留逐帧内参和原视频／IMU 时钟映射，详见[变焦验证与边界](docs/zoom-validation.md)。
 
-设置采用深蓝灰背景与分组卡片，青绿色表示主要操作，蓝色表示稳定强度，紫色表示裁切。导出分辨率使用可直接点选的卡片；播放页突出导出按钮，保存成功后显示绿色勾选反馈。见[配色与界面验证](docs/design/settings-color.md)。
+设置采用深蓝灰背景与分组卡片，青绿色表示主要操作，蓝色表示稳定强度，紫色表示裁切。输出分辨率在“稳定与输出”设置中使用可直接点选的卡片；播放页突出导出按钮，保存成功后显示绿色勾选反馈。见[配色与界面验证](docs/design/settings-color.md)。
 
 素材页按日期分组，可长按删除、批量选择并查看预计释放空间；删除会一并清理原片、稳定结果和运动数据，保留系统相册中的独立副本。处理中的素材先取消并等待工作线程退出，再删除。播放页保留全屏画面，顶部切换「原片／稳定」，底部「调整／导出」，更多菜单提供素材信息和删除。见[设计说明](docs/design/library-refinement.md)与[验证记录](docs/library-validation.md)。
 
 点击取景器顶部格式或进入设置，可选择当前镜头支持的 **1080p / 4K × 24 / 30 / 60 fps**。
-首次使用默认 **4K / 60 fps、曝光上限 5 ms、2.8K 导出**。选择会保留，录制中不可更改。“稳定与导出参数”可单独选择 **1080p（1920×1080）/ 2.8K（2816×1584）**。
+首次使用默认 **4K / 60 fps、曝光上限 5 ms、2.8K / 60 fps 输出**。升级时将旧的全局输出默认值一次性迁移到 2.8K，保留稳定参数与已有素材；此后手动选择的分辨率仍会记住。录制选择会保留，录制中不可更改。拍摄前在“设置 → 默认稳定与输出”选择 **1080p（1920×1080）/ 2.8K（2816×1584）**；已有素材在“调整”中选择后生成。
 导出保留原帧率和时间戳，横竖屏自动适配，输出不超过原片尺寸；1080p 原片不会放大到 2.8K。
 
 曝光新增“室内折中（≤10 ms）”：保留系统自动曝光和 ISO，限制长曝光拖影。
@@ -32,7 +38,7 @@
 - 连续自动对焦（不支持的镜头显示固定对焦）；曝光模式可选系统自动、室内折中（最长 10 ms）或运动清晰（最长 5 ms），保留自动 ISO。视频与 IMU 使用系统时钟映射同步。
 - 处理权限拒绝、空间不足、视频丢帧、传感器中断、相机中断、退后台收尾。
 
-录制结束后自动按导出设置生成稳定视频，保留原片与原声音。素材预览可切换原片／稳定结果，并保存当前版本到相册。旧素材可以手动点击「生成稳定视频」。
+录制结束后自动按预设的输出分辨率和稳定设置生成稳定视频，保留原片与原声音。素材预览可切换原片／稳定结果，并保存当前版本到相册。旧素材可以手动点击「生成稳定视频」。
 
 Gyroflow 1.6.3 核心读取实际录制时钟映射、原始陀螺仪和逐帧完整内参，使用可调平滑与裁切；没有额外视觉时间补偿。当前直接在 IOSurface 的 NV12 纹理上执行 Metal 重投影，保留 Lanczos4 采样，最多 3 帧并行。应用不再做逐帧 BGRA 转换、GPU 上传或读回；Apple 框架负责视频解码、编码和音频封装。姿态、平滑和裁切继续由 CPU 计算。性能数据与边界见 [性能验证](docs/performance-validation.md)。
 
@@ -40,13 +46,13 @@ Gyroflow 1.6.3 核心读取实际录制时钟映射、原始陀螺仪和逐帧�
 
 ## 在 iPhone 运行
 
-1. 先按下方说明编译 Rust 核心，再用 Xcode 打开 `MotionCam.xcodeproj`，选择 `MotionCam` scheme。
+1. 先按下方说明编译 Rust 核心，再用 Xcode 打开 `RoamShot.xcodeproj`，选择 `RoamShot` scheme。
 2. 连接并信任 iPhone（iOS 17+），按系统提示开启开发者模式。
-3. 在 Signing & Capabilities 中确认你的开发团队。工程已沿用 SensorRecorder 的团队配置，Bundle ID 为 `com.grape.MotionCam`。
+3. 在 Signing & Capabilities 中确认你的开发团队。工程已沿用 SensorRecorder 的团队配置，Bundle ID 为 `com.grape.RoamShot`。
 4. 选择 iPhone，点击 Run，允许相机、麦克风和运动访问。
 5. 拍摄约 15 秒：静止几秒、左右转动、走几步，再停止。
 6. 点击左下角素材入口，等待稳定处理，切换原片与稳定结果并检查声音；需要时保存到相册。
-7. 从“文件 → 我的 iPhone → MotionCam → Recordings”导出整段文件夹，按[真机验收](docs/recording-validation.md)检查。
+7. 从“文件 → 我的 iPhone → RoamShot → Recordings”导出整段文件夹，按[真机验收](docs/recording-validation.md)检查。
 
 模拟器可用合成素材验证处理与界面，不支持本项目的真实 Camera / IMU 录制。
 
@@ -59,12 +65,12 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 cargo test --manifest-path Engine/Cargo.toml --release --locked
 swift test
 python3 -m unittest discover -s Tests/AuditTests -v
-xcodebuild -project MotionCam.xcodeproj -scheme MotionCam \
+xcodebuild -project RoamShot.xcodeproj -scheme RoamShot \
   -configuration Release -destination 'generic/platform=iOS' \
   -derivedDataPath build-device CODE_SIGNING_ALLOWED=NO
 ```
 
-首次构建需要联网获取 Gyroflow 子模块和锁定的 Rust 依赖。构建脚本检查上游提交并应用 `patches/gyroflow-full-intrinsics.patch`，因此子模块显示本地修改是预期状态；完整修改以该补丁随源码发布。成品编译后运行 `python3 scripts/check_app_linkage.py <MotionCam.app路径>`，确保未误连开发机上的动态库。新增 Swift 文件后运行 `python3 scripts/generate_project.py` 更新工程；生成文件一并提交。
+首次构建需要联网获取 Gyroflow 子模块和锁定的 Rust 依赖。构建脚本检查上游提交并应用 `patches/gyroflow-full-intrinsics.patch`，因此子模块显示本地修改是预期状态；完整修改以该补丁随源码发布。成品编译后运行 `python3 scripts/check_app_linkage.py <RoamShot.app路径>`，确保未误连开发机上的动态库。新增 Swift 文件后运行 `python3 scripts/generate_project.py` 更新工程；生成文件一并提交。
 
 ## 结构
 
@@ -92,12 +98,14 @@ xcodebuild -project MotionCam.xcodeproj -scheme MotionCam \
 
 ## 许可证
 
-GPL-3.0-or-later，附 App Store 许可，详见 [LICENSE](LICENSE) 与 [第三方说明](THIRD_PARTY_NOTICES.md)。本仓库提供应用、核心补丁、依赖锁文件和构建脚本；商店发布前仍需归档匹配源码并整理全部依赖声明。
+GPL-3.0-or-later，附 App Store 许可，详见 [LICENSE](LICENSE) 与 [第三方说明](THIRD_PARTY_NOTICES.md)。本仓库提供应用、核心补丁、依赖锁文件和构建脚本；对应构建使用版本标签归档源码；完整依赖声明见 THIRD_PARTY_LICENSES.txt，可用 scripts/generate_licenses.py 重新生成。
 
 ## 方向与稳定参数
 
-- 设置 → 默认稳定参数：保存之后新建任务使用的默认值。
-- 素材 → 预览 → 调整稳定参数：针对该素材重新生成，原片和上一版结果保留到成功替换。
+- 设置 → 默认稳定与输出：拍摄前保存输出分辨率和稳定效果，之后新建任务直接按该设置生成。
+- 素材 → 预览 → 调整：选择效果和输出分辨率，先检查参数再生成；原片和上一版结果保留到成功替换。
+- 普通模式自动协调裁切与效果；“处理说明”显示实际降低的平滑时间和水平锁定程度。极端情况下仅能调整画幅时明确标注未能提供稳定效果。
+- 高级参数修改后进入自定义模式；选择自然／标准／强力可以恢复自动适配。
 - 稳定强度 0–100% 使用非线性刻度，对应 0–10 秒平滑时间。最大裁切 1–5×：动态时是倍数上限，固定时使用该实际倍数。
 - “稳定优先”保留选定平滑强度，在裁切不足的区域填黑；“画面完整优先”逐步降低平滑强度并显示裁切限制提示，仍无法满足上限则报错。极端运动下的边缘覆盖仍需实拍验收。
 - 每段保存 stabilization-options.json；stabilization.json 中记录完成输出的选项。

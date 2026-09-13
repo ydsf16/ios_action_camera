@@ -7,6 +7,7 @@ final class StabilizationJobs: ObservableObject {
     enum State { case queued, processing(Double), ready, failed(String) }
     @Published private(set) var states: [String: State] = [:]
     @Published private(set) var revisions: [String: Int] = [:]
+    @Published private(set) var parameterConflicts: Set<String> = []
     private struct Job { let directory: URL; let options: StabilizationOptions }
     private var pending: [Job] = []
     private var active: URL?
@@ -23,6 +24,7 @@ final class StabilizationJobs: ObservableObject {
             states[key] = .ready; return
         }
         guard active != directory, !pending.contains(where: { $0.directory == directory }) else { return }
+        parameterConflicts.remove(key)
         let selected = options ?? StabilizationOptions.load(directory: directory)
         do { try selected.save(directory: directory) }
         catch { states[key] = .failed(error.localizedDescription); return }
@@ -75,6 +77,7 @@ final class StabilizationJobs: ObservableObject {
         for directory in removal.removed {
             states.removeValue(forKey: directory.lastPathComponent)
             revisions.removeValue(forKey: directory.lastPathComponent)
+            parameterConflicts.remove(directory.lastPathComponent)
         }
         for directory in targets where !removal.removed.contains(directory) {
             states[directory.lastPathComponent] = .failed("删除未完成，素材仍保留，可重新处理或重试删除。")
@@ -113,6 +116,7 @@ final class StabilizationJobs: ObservableObject {
                 states[directory.lastPathComponent] = .ready
                 revisions[directory.lastPathComponent, default: 0] += 1
             case let .failure(error):
+                if error is StabilizationProcessor.ParameterConflict { parameterConflicts.insert(directory.lastPathComponent) }
                 let diagnostic = ["stage": "failed", "error": error.localizedDescription,
                                   "updated_at": ISO8601DateFormatter().string(from: Date())]
                 if let data = try? JSONSerialization.data(withJSONObject: diagnostic, options: [.sortedKeys]) {

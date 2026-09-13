@@ -1,11 +1,11 @@
 [package]
-name = "motioncam-gyroflow"
+name = "roamshot-gyroflow"
 version = "0.2.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
 
 [lib]
-name = "motioncam_gyroflow"
+name = "roamshot_gyroflow"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]

@@ -6,7 +6,7 @@ import Foundation
 /// Exercise the real export/receipt pipeline with deliberately synthetic motion.
 enum StabilizationParameterValidation {
     static func run(fixture: URL) async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("motioncam-parameters-\(UUID().uuidString)")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("roamshot-parameters-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let names = ["video.mov", "frames.csv", "gyro.csv", "manifest.json"]

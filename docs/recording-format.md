@@ -1,7 +1,7 @@
 # 录制包 v1
 
 ```text
-MC_日期_时间_随机ID/
+RS_日期_时间_随机ID/
   manifest.json       配置、时间原点、状态、计数和警告
   video.mov           H.264 + AAC；正常封装完成后才使用此文件名
   frames.csv          每个成功写入的视频帧

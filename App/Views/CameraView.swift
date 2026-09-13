@@ -6,21 +6,27 @@ struct CameraView: View {
     private let jobs = StabilizationJobs.shared
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @ObservedObject private var access = ProAccess.shared
+    @State private var showRecordingUpgrade = false
     @State private var showLibrary = false
     @State private var showSettings = false
     @State private var pinchStartZoom: Double?
+    @AppStorage("cameraGridEnabled") private var gridEnabled = false
 
     private var recording: Bool { camera.phase == .recording }
 
     var body: some View {
         ZStack {
-            CameraPreview(session: camera.session, device: camera.previewDevice, rotationChanged: camera.setCameraRotation)
-                .ignoresSafeArea()
-                .gesture(MagnifyGesture().onChanged { value in
-                    guard camera.phase == .ready || recording else { return }
+            CameraPreview(session: camera.session, device: camera.previewDevice,
+                gridEnabled: gridEnabled, interactionEnabled: camera.phase == .ready || recording,
+                focusFeedback: camera.focusFeedback, rotationChanged: camera.setCameraRotation,
+                focusRequested: camera.focus,
+                zoomChanged: { scale, ended in
+                    if ended { pinchStartZoom = nil; return }
                     if pinchStartZoom == nil { pinchStartZoom = camera.zoom }
-                    camera.setZoom((pinchStartZoom ?? camera.zoom) * value.magnification)
-                }.onEnded { _ in pinchStartZoom = nil })
+                    camera.setZoom((pinchStartZoom ?? camera.zoom) * scale)
+                })
+                .ignoresSafeArea()
 
             // Subtle scrims keep controls readable without reserving space in the viewfinder.
             VStack(spacing: 0) {
@@ -50,7 +56,7 @@ struct CameraView: View {
             // Only the controls respect safe areas; the live image extends behind them.
             VStack(spacing: 0) {
                 HStack {
-                    Text(recording ? timer : "MotionCam")
+                    Text(recording ? timer : "RoamShot")
                         .font(.system(.headline, design: .monospaced)).foregroundStyle(recording ? .red : .white)
                     Spacer()
                     Menu {
@@ -84,6 +90,10 @@ struct CameraView: View {
                     }
                     if camera.zoomRange.maximum > camera.zoomRange.minimum { CameraZoomControls(camera: camera) }
 
+                    if !access.hasPro {
+                        Text(recording ? "免费录制 · \(max(0, 60 - Int(camera.duration))) 秒后自动保存" : "免费每段 1 分钟 · 解锁可录更久")
+                            .font(.caption).foregroundStyle(.white.opacity(0.85))
+                    }
                     Text(camera.phase == .finishing ? "正在保存…" : "视频")
                         .foregroundStyle(.yellow).font(.system(size: 14, weight: .semibold))
                         .shadow(color: .black.opacity(0.5), radius: 3, y: 1)
@@ -96,7 +106,7 @@ struct CameraView: View {
                         Spacer()
                         Button {
                             if recording { camera.stopRecording() } else {
-                                camera.startRecording()
+                                if access.hasPro { camera.startRecording() } else { showRecordingUpgrade = true }
                             }
                         } label: {
                             ZStack {
@@ -110,7 +120,7 @@ struct CameraView: View {
                                 }
                             }
                         }
-                        .disabled(camera.phase != .ready && camera.phase != .recording)
+                        .disabled(camera.startingRecording || (camera.phase != .ready && camera.phase != .recording))
                         .accessibilityLabel(recording ? "停止录制" : "开始录制")
                         .accessibilityIdentifier("recordButton")
                         Spacer()
@@ -121,8 +131,11 @@ struct CameraView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black).foregroundStyle(.white)
+        .sheet(isPresented: $showRecordingUpgrade) {
+            ProUpgradeView(freeRecording: { camera.startRecording() }, unlocked: { camera.startRecording() })
+        }
         .sheet(isPresented: $showLibrary) { RecordingLibraryView() }
-        .sheet(isPresented: $showSettings) { RecordingSettingsView(camera: camera) }
+        .sheet(isPresented: $showSettings) { RecordingSettingsView(camera: camera, gridEnabled: $gridEnabled) }
         .alert("拍摄提示", isPresented: Binding(get: { camera.message != nil }, set: { if !$0 { camera.message = nil } })) {
             Button("知道了", role: .cancel) { camera.message = nil }
         } message: { Text(camera.message ?? "") }
@@ -132,7 +145,7 @@ struct CameraView: View {
             let args = ProcessInfo.processInfo.arguments
             if let index = args.firstIndex(of: "--stabilize-recording"), index + 1 < args.count {
                 let name = args[index + 1]
-                if name.hasPrefix("MC_"), !name.contains("/"), !name.contains("..") {
+                if (name.hasPrefix("RS_") || name.hasPrefix("MC_")), !name.contains("/"), !name.contains("..") {
                     showLibrary = true
                     jobs.enqueue(CaptureService.recordingsRoot.appendingPathComponent(name), force: args.contains("--force-stabilization"))
                     return
@@ -141,9 +154,13 @@ struct CameraView: View {
             #endif
             camera.setActive(scenePhase == .active)
             await camera.prepare()
+            #if DEBUG
+            if args.contains("--focus-controls-test") { await camera.validateFocusControls() }
+            #endif
         }
         .onChange(of: scenePhase) { _, value in
             if value == .active {
+                Task { await access.refresh() }
                 jobs.setForeground(true)
                 camera.setActive(!showLibrary)
                 if !showLibrary { Task { await camera.prepare() } }
@@ -162,88 +179,6 @@ struct CameraView: View {
     private var timer: String {
         let seconds = Int(camera.duration)
         return String(format: "%02d:%02d", seconds / 60, seconds % 60)
-    }
-}
-
-private struct CameraPreview: UIViewRepresentable {
-    let session: AVCaptureSession
-    let device: AVCaptureDevice?
-    var rotationChanged: (Double, Double, String) -> Void
-    class PreviewView: UIView {
-        var rotationChanged: ((Double, Double, String) -> Void)?
-        private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
-        private var previewObservation: NSKeyValueObservation?
-        private var captureObservation: NSKeyValueObservation?
-        private var reportedCaptureAngle: CGFloat?
-        private var reportedPreviewAngle: CGFloat?
-        override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
-        var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
-        func configure(device: AVCaptureDevice?) {
-            guard rotationCoordinator?.device !== device else { updateOrientation(); return }
-            previewObservation = nil; captureObservation = nil; rotationCoordinator = nil
-            reportedCaptureAngle = nil; reportedPreviewAngle = nil
-            guard let device else { return }
-            let coordinator = AVCaptureDevice.RotationCoordinator(device: device, previewLayer: previewLayer)
-            rotationCoordinator = coordinator
-            // Apple delivers these notifications on main. Keep the preview and
-            // capture angles separate: they differ when the interface is locked.
-            previewObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelPreview, options: [.initial, .new]) { [weak self] _, _ in
-                self?.updateOrientation()
-            }
-            captureObservation = coordinator.observe(\.videoRotationAngleForHorizonLevelCapture, options: [.initial, .new]) { [weak self] _, _ in
-                self?.updateOrientation()
-            }
-        }
-        func disconnect() {
-            previewObservation = nil; captureObservation = nil; rotationCoordinator = nil
-            rotationChanged = nil
-            previewLayer.session = nil
-        }
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            updateOrientation()
-        }
-        override func layoutSubviews() {
-            super.layoutSubviews()
-            updateOrientation()
-        }
-        func updateOrientation() {
-            guard let coordinator = rotationCoordinator, let device = coordinator.device else { return }
-            let angle = coordinator.videoRotationAngleForHorizonLevelPreview
-            // A detached preview layer reports zero; apply it once the view is visible.
-            guard window != nil else { return }
-            let captureAngle = coordinator.videoRotationAngleForHorizonLevelCapture
-            if reportedCaptureAngle != captureAngle || reportedPreviewAngle != angle {
-                reportedCaptureAngle = captureAngle; reportedPreviewAngle = angle
-                rotationChanged?(Double(captureAngle), Double(angle), device.uniqueID)
-            }
-            guard let connection = previewLayer.connection else { return }
-            // SwiftUI progress/timer updates must not reconfigure an unchanged camera connection.
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            if connection.videoRotationAngle != angle, connection.isVideoRotationAngleSupported(angle) {
-                connection.videoRotationAngle = angle
-            }
-            if connection.isVideoStabilizationSupported, connection.preferredVideoStabilizationMode != .off {
-                connection.preferredVideoStabilizationMode = .off
-            }
-            CATransaction.commit()
-        }
-    }
-    func makeUIView(context: Context) -> PreviewView {
-        let view = PreviewView()
-        view.rotationChanged = rotationChanged
-        view.previewLayer.session = session
-        view.previewLayer.videoGravity = .resizeAspectFill
-        view.configure(device: device)
-        return view
-    }
-    func updateUIView(_ view: PreviewView, context: Context) {
-        view.rotationChanged = rotationChanged
-        view.configure(device: device)
-    }
-    static func dismantleUIView(_ view: PreviewView, coordinator: ()) {
-        view.disconnect()
     }
 }
 
@@ -271,11 +206,24 @@ private struct CaptureFormatControls: View {
 }
 
 private struct RecordingSettingsView: View {
+    @ObservedObject private var access = ProAccess.shared
+    @State private var showUpgrade = false
     @ObservedObject var camera: CaptureService
+    @Binding var gridEnabled: Bool
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    Button { showUpgrade = true } label: {
+                        HStack {
+                            SettingsLabel("RoamShot Pro", symbol: "sparkles")
+                            Spacer()
+                            Text(access.hasPro ? "已永久解锁" : "永久解锁").font(.subheadline).foregroundStyle(AppTheme.accent)
+                        }
+                    }
+                } footer: { Text("免费每段最长 1 分钟，到点自动保存。Pro 解锁长时间录制，稳定处理和导出不另收费。") }
+                    .listRowBackground(AppTheme.surface)
                 Section {
                     CaptureFormatControls(camera: camera, showIcons: true).disabled(camera.phase != .ready)
                     LabeledContent {
@@ -291,14 +239,21 @@ private struct RecordingSettingsView: View {
                 } header: { Text("录制") } footer: {
                     Text(camera.exposurePolicy.explanation)
                 }.listRowBackground(AppTheme.surface)
+                Section {
+                    Toggle(isOn: $gridEnabled) {
+                        SettingsLabel("九宫格参考线", symbol: "grid", color: AppTheme.blue)
+                    }.accessibilityIdentifier("cameraGridToggle")
+                } header: { Text("拍摄辅助") } footer: {
+                    Text("参考线仅显示在取景画面中。轻点画面选择对焦位置，长按对焦后锁定，再次轻点恢复连续自动对焦。")
+                }.listRowBackground(AppTheme.surface)
                 Section("稳定处理") {
                     NavigationLink { StabilizationSettingsView() } label: {
-                        SettingsLabel("默认稳定与导出参数", symbol: "waveform.path")
+                        SettingsLabel("默认稳定与输出", symbol: "waveform.path")
                     }
                 }.listRowBackground(AppTheme.surface)
                 Section("保存") {
                     SettingsLabel("素材保存在本机", symbol: "internaldrive", color: AppTheme.blue)
-                    Text("素材页可批量删除，预览页可导出到相册。完整录制文件可在“文件 → 我的 iPhone → MotionCam → Recordings”中导出。")
+                    Text("素材页可批量删除，预览页可导出到相册。完整录制文件可在“文件 → 我的 iPhone → RoamShot → Recordings”中导出。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }.listRowBackground(AppTheme.surface)
                 Section {
@@ -313,6 +268,11 @@ private struct RecordingSettingsView: View {
                         Text("录制期间分辨率和帧率固定，可双指或使用滑条变焦。自动切换镜头由系统根据倍率、光线和对焦距离决定；60 fps 会增加存储和处理量。")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
+                }.listRowBackground(AppTheme.surface)
+                Section("帮助") {
+                    Link("使用帮助", destination: AppLinks.support)
+                    Link("隐私政策", destination: AppLinks.privacy)
+                    Link("使用条款", destination: AppLinks.terms)
                 }.listRowBackground(AppTheme.surface)
                 Section("开源") {
                     Link(destination: URL(string: "https://github.com/ydsf16/ios_action_camera")!) {
@@ -332,5 +292,6 @@ private struct RecordingSettingsView: View {
             .navigationTitle("设置").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
         }.tint(AppTheme.accent)
+            .sheet(isPresented: $showUpgrade) { ProUpgradeView() }
     }
 }

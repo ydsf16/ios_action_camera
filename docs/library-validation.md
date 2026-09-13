@@ -23,20 +23,20 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 swift test
 xcrun swiftc -parse-as-library Sources/CaptureCore/*.swift \
   App/Stabilization/StabilizationJobs.swift scripts/DeletionQueueValidation.swift \
-  -o /tmp/motioncam-deletion-queue-validation
-/tmp/motioncam-deletion-queue-validation
+  -o /tmp/roamshot-deletion-queue-validation
+/tmp/roamshot-deletion-queue-validation
 ```
 
 真实处理器验证需要先构建主机 Rust 静态库，并将 `Stabilize.metal` 编译为验证可执行文件旁的 `default.metallib`：
 
 ```sh
-xcrun swiftc -O -parse-as-library -import-objc-header Engine/include/MotionCamGyroflow.h \
+xcrun swiftc -O -parse-as-library -import-objc-header Engine/include/RoamShotGyroflow.h \
   Sources/CaptureCore/*.swift App/Stabilization/MetalStabilizer.swift \
   App/Stabilization/StabilizationProcessor.swift App/Stabilization/StabilizationJobs.swift \
-  scripts/ProcessingCancellationValidation.swift Engine/target/release/libmotioncam_gyroflow.a \
+  scripts/ProcessingCancellationValidation.swift Engine/target/release/libroamshot_gyroflow.a \
   -lc++ -liconv -framework Metal -framework QuartzCore -framework Security \
-  -framework SystemConfiguration -o /tmp/motioncam-validation/cancellation
-/tmp/motioncam-validation/cancellation /path/to/synthetic/MC_fixture_4K60
+  -framework SystemConfiguration -o /tmp/roamshot-validation/cancellation
+/tmp/roamshot-validation/cancellation /path/to/synthetic/MC_fixture_4K60
 ```
 
 该脚本将输入复制到独立临时目录后验证，输入不会被删除或替换。

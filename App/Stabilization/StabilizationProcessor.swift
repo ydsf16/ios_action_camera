@@ -21,6 +21,50 @@ final class ProcessingControl: @unchecked Sendable {
 /// Offline worker. Native pixel orientation and original movie PTS are preserved.
 enum StabilizationProcessor {
     static let filename = "stabilized.mov"
+    enum ParameterConflict: LocalizedError {
+        case cropLimit
+        var errorDescription: String? { "这些设置无法同时保留完整画面。可增大裁切、允许黑边，或使用推荐设置。" }
+    }
+    private static func makeEngine(_ config: StabilizationInput) throws -> OpaquePointer {
+        let json = String(decoding: try JSONEncoder().encode(config), as: UTF8.self)
+        var error = [CChar](repeating: 0, count: 2048)
+        guard let engine = json.withCString({ mc_engine_create($0, &error, error.count) }) else {
+            let reason = String(cString: error)
+            if reason.hasPrefix("裁切上限不足：") { throw ParameterConflict.cropLimit }
+            throw InputError("稳定引擎初始化失败：\(reason)")
+        }
+        return engine
+    }
+    private static func report(_ engine: OpaquePointer) throws -> StabilizationReport {
+        var value = MCStabilizationReport()
+        guard mc_engine_report(engine, &value) == 0 else { throw InputError("无法读取稳定处理结果。") }
+        return StabilizationReport(requestedSmoothingSeconds: value.requested_smoothing_seconds,
+            effectiveSmoothingSeconds: value.effective_smoothing_seconds, minimumCrop: value.minimum_crop, maximumCrop: value.maximum_crop,
+            requestedHorizonPercent: value.requested_horizon_percent, effectiveHorizonPercent: value.effective_horizon_percent)
+    }
+    private static func validateTransform(_ transform: CGAffineTransform, config: StabilizationInput) throws {
+        guard config.options.horizonLock else { return }
+        let expected = CGAffineTransform(rotationAngle: Double(config.display_rotation_degrees) * .pi / 180)
+        guard zip([transform.a, transform.b, transform.c, transform.d], [expected.a, expected.b, expected.c, expected.d])
+            .allSatisfy({ abs($0.0-$0.1) < 0.0001 }) else {
+            throw InputError("视频显示方向与录制信息不一致，无法可靠锁定水平。")
+        }
+    }
+    /// Metadata/pose-only feasibility check. Does not decode pixels, encode a trial
+    /// movie, save options, or touch an existing result/receipt.
+    static func preflight(directory: URL, options: StabilizationOptions, control: ProcessingControl) async throws -> StabilizationReport {
+        try control.checkpoint()
+        let config = try StabilizationInput.load(directory: directory, options: options)
+        try control.checkpoint()
+        let engine = try makeEngine(config)
+        defer { mc_engine_destroy(engine) }
+        try control.checkpoint()
+        let asset = AVURLAsset(url: directory.appendingPathComponent("video.mov"))
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw InputError("找不到视频轨道。") }
+        try validateTransform(try await track.load(.preferredTransform), config: config)
+        try control.checkpoint()
+        return try report(engine)
+    }
     static func process(directory: URL, options: StabilizationOptions, control: ProcessingControl, progress: @escaping (Double) -> Void) async throws -> URL {
         let processingStarted = Date()
         var timings: [String: Double] = [:]
@@ -38,21 +82,14 @@ enum StabilizationProcessor {
         }
         mark("reading-input")
         let config = try StabilizationInput.load(directory: directory, options: options)
-        let json = String(decoding: try JSONEncoder().encode(config), as: UTF8.self)
         var errorBuffer = [CChar](repeating: 0, count: 2048)
         measured("input_parse_seconds")
         mark("waiting-for-capture")
         try control.checkpoint()
         mark("initializing-core")
-        guard let engine = json.withCString({ mc_engine_create($0, &errorBuffer, errorBuffer.count) }) else {
-            throw InputError("稳定引擎初始化失败：\(String(cString: errorBuffer))")
-        }
+        let engine = try makeEngine(config)
         defer { mc_engine_destroy(engine) }
-        var coreReport = MCStabilizationReport()
-        guard mc_engine_report(engine, &coreReport) == 0 else { throw InputError("无法读取稳定处理结果。") }
-        let stabilizationReport = StabilizationReport(requestedSmoothingSeconds: coreReport.requested_smoothing_seconds,
-            effectiveSmoothingSeconds: coreReport.effective_smoothing_seconds,
-            minimumCrop: coreReport.minimum_crop, maximumCrop: coreReport.maximum_crop)
+        let stabilizationReport = try report(engine)
         measured("pose_smoothing_crop_seconds")
         let renderer = try legacy ? nil : MetalStabilizer()
         let pixelFormat = legacy ? kCVPixelFormatType_32BGRA : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
@@ -65,14 +102,7 @@ enum StabilizationProcessor {
         let asset = AVURLAsset(url: original)
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else { throw InputError("找不到视频轨道。") }
         let displayTransform = try await videoTrack.load(.preferredTransform)
-        if options.horizonLock {
-            let angle = Double(config.display_rotation_degrees) * .pi / 180
-            let expected = CGAffineTransform(rotationAngle: angle)
-            guard zip([displayTransform.a, displayTransform.b, displayTransform.c, displayTransform.d],
-                      [expected.a, expected.b, expected.c, expected.d]).allSatisfy({ abs($0.0-$0.1) < 0.0001 }) else {
-                throw InputError("视频显示方向与录制信息不一致，无法可靠锁定水平。")
-            }
-        }
+        try validateTransform(displayTransform, config: config)
         let reader = try AVAssetReader(asset: asset)
         let videoReader = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: [
             kCVPixelBufferPixelFormatTypeKey as String: pixelFormat,
@@ -236,8 +266,8 @@ enum StabilizationProcessor {
             guard writer.status == .completed else { throw writer.error ?? InputError("稳定视频封装失败。") }
             measured("finish_audio_container_seconds")
             let receipt: [String:Any] = ["engine":"Gyroflow 1.6.3", "backend":legacy ? "Metal (wgpu BGRA benchmark)" : "Metal NV12 IOSurface", "timings":timings, "max_inflight_frames":legacy ? 1 : 3, "app_cpu_pixel_copies_per_frame":legacy ? 2 : 0, "interpolation":"Lanczos4", "processing_seconds":Date().timeIntervalSince(processingStarted), "options": try JSONSerialization.jsonObject(with: JSONEncoder().encode(options)), "input_frames":count,"output_width":config.output_width,
-                "output_height":config.output_height,"requested_fps":config.fps,"rolling_shutter":false,"horizon_lock":options.horizonLock,
-                "horizon_source":options.horizonLock ? "CoreMotion.gravity" : "off", "gravity_samples":config.gravity.count,
+                "output_height":config.output_height,"requested_fps":config.fps,"rolling_shutter":false,"horizon_lock":(stabilizationReport.effectiveHorizonPercent ?? 0) > 0,
+                "horizon_source":(stabilizationReport.effectiveHorizonPercent ?? 0) > 0 ? "CoreMotion.gravity" : "off", "gravity_samples":config.gravity.count,
                 "gravity_orientation":"native image axes = [-deviceY, -deviceX, -deviceZ]; horizon roll = -displayRotationDegrees",
                 "stabilization": try JSONSerialization.jsonObject(with: JSONEncoder().encode(stabilizationReport)),
                 "lens_model":"recorded per-frame K; uncalibrated zero residual distortion", "created_at":ISO8601DateFormatter().string(from:Date())]

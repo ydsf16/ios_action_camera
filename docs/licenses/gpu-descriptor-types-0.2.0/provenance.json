@@ -1,0 +1,12 @@
+{
+  "package": "gpu-descriptor-types",
+  "version": "0.2.0",
+  "repo": "https://github.com/zakarumych/gpu-descriptor",
+  "ref": "9f2fb9546591322e7b77ee1e79385e01effd85e4",
+  "files": [
+    {
+      "name": "COPYING",
+      "url": "https://raw.githubusercontent.com/zakarumych/gpu-descriptor/9f2fb9546591322e7b77ee1e79385e01effd85e4/COPYING"
+    }
+  ]
+}

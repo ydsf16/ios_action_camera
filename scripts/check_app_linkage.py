@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject developer-machine dylib dependencies in a built MotionCam.app."""
+"""Reject developer-machine dylib dependencies in a built RoamShot.app."""
 import argparse
 from pathlib import Path
 import subprocess
@@ -19,7 +19,7 @@ for binary in args.app.rglob("*"):
     output = subprocess.check_output(["xcrun", "otool", "-L", str(binary)], text=True)
     for line in output.splitlines()[1:]:
         dependency = line.strip().split(" (compatibility version", 1)[0]
-        if (dependency.startswith("/") and not dependency.startswith(("/System/Library/", "/usr/lib/"))) or "libmotioncam_gyroflow.dylib" in dependency:
+        if (dependency.startswith("/") and not dependency.startswith(("/System/Library/", "/usr/lib/"))) or "libroamshot_gyroflow.dylib" in dependency:
             errors.append(f"{binary.name}: {dependency}")
 if errors or not checked:
     raise SystemExit("Invalid app linkage:\n" + "\n".join(errors or ["No Mach-O binaries found"]))

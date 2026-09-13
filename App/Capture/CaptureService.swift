@@ -32,6 +32,9 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     @Published private(set) var exposurePolicy = CaptureExposurePolicy.load()
     private var activeExposurePolicy = CaptureExposurePolicy.load()
     @Published private(set) var focusLabel = "准备中"
+    @Published private(set) var focusFeedback: CameraFocusFeedback?
+    private var focusSelection: CameraFocusFeedback? // capture queue only
+    private var focusPrimaryID: String?
     @Published private(set) var selectedFormat = CaptureFormat.load()
     @Published private(set) var availableFormats: [CaptureFormat] = []
     var formatLabel: String { selectedFormat.label }
@@ -46,7 +49,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     @Published var message: String?
     @Published private(set) var permissionDenied = false
 
-    private let queue = DispatchQueue(label: "com.grape.MotionCam.capture", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "com.grape.RoamShot.capture", qos: .userInitiated)
     private let motion = CMMotionManager()
     private lazy var motionQueue: OperationQueue = {
         let value = OperationQueue()
@@ -58,6 +61,8 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     private let audioOutput = AVCaptureAudioDataOutput()
     private var cameraInput: AVCaptureDeviceInput?
     private var recorder: RecordingWriter?
+    private var recordingLimitTimeout: DispatchWorkItem?
+    @Published private(set) var startingRecording = false
     private var isFinishing = false
     private var acceptsMotion = false
     private var configured = false
@@ -144,6 +149,13 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
             if active { resumeIfPossible() }
             else {
                 stopOnQueue(reason: "app_background")
+                if let device = cameraInput?.device {
+                    do {
+                        try device.lockForConfiguration()
+                        resetFocusLocked(device)
+                        device.unlockForConfiguration()
+                    } catch { /* Retain actual focus status if configuration is unavailable. */ }
+                }
                 if session.isRunning { session.stopRunning() }
                 if recorder == nil { stopMotion(); endFinishingTask() }
             }
@@ -298,6 +310,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         if device.isVirtualDevice, device.primaryConstituentDeviceSwitchingBehavior != .unsupported {
             device.setPrimaryConstituentDeviceSwitchingBehavior(.auto, restrictedSwitchingBehaviorConditions: [])
         }
+        resetFocusLocked(device)
         try applyRecordingControlsLocked(device)
         if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) { device.whiteBalanceMode = .continuousAutoWhiteBalance }
     }
@@ -390,6 +403,95 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         }
     }
 
+    /// Point comes from AVCaptureVideoPreviewLayer, already in native camera coordinates.
+    /// Focus changes do not reconfigure the session, exposure, output connection or IMU.
+    func focus(at point: CGPoint, deviceID: String, lock: Bool) {
+        guard point.x.isFinite, point.y.isFinite, (0...1).contains(point.x), (0...1).contains(point.y) else { return }
+        queue.async { [self] in
+            guard configured, wantsActive, session.isRunning, !isFinishing,
+                  let device = cameraInput?.device, device.uniqueID == deviceID else { return }
+            let primary = device.activePrimaryConstituent ?? device
+            let mode: AVCaptureDevice.FocusMode = lock ? .autoFocus : .continuousAutoFocus
+            guard device.isFocusPointOfInterestSupported, device.isFocusModeSupported(mode),
+                  primary.isFocusPointOfInterestSupported, primary.isFocusModeSupported(mode) else {
+                let feedback = CameraFocusFeedback(id: UUID(), point: nil, phase: .unavailable)
+                // Keep a previously requested lock intact when an unsupported request is rejected.
+                publish { $0.focusFeedback = feedback }
+                return
+            }
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                device.focusPointOfInterest = point
+                // Apple's one-shot autoFocus transitions to locked when its scan completes.
+                device.focusMode = mode
+                focusPrimaryID = primary.uniqueID
+                let selection = CameraFocusFeedback(id: UUID(), point: point, phase: lock ? .locking : .tracking)
+                focusSelection = selection
+                publish { $0.focusFeedback = selection }
+                refreshFocusStatus(device)
+                writeConfigurationReport()
+            } catch { publish { $0.message = error.localizedDescription } }
+        }
+    }
+
+    /// Caller holds lockForConfiguration. Format/input changes restore normal focusing.
+    private func resetFocusLocked(_ device: AVCaptureDevice) {
+        if device.isFocusPointOfInterestSupported { device.focusPointOfInterest = CGPoint(x: 0.5, y: 0.5) }
+        if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
+        focusSelection = nil
+        focusPrimaryID = (device.activePrimaryConstituent ?? device).uniqueID
+        publish { $0.focusFeedback = nil }
+    }
+
+    /// Read actual focus mode on the existing throttled preview-frame path.
+    private func refreshFocusStatus(_ device: AVCaptureDevice) {
+        let primary = device.activePrimaryConstituent ?? device
+        if let previous = focusPrimaryID, previous != primary.uniqueID,
+           let selection = focusSelection, selection.point != nil {
+            let primaryID = primary.uniqueID
+            // publishZoom also runs while zoom configuration is locked. Defer the reset
+            // and reject stale work if another tap/input change arrives in the meantime.
+            queue.async { [weak self] in
+                guard let self, self.cameraInput?.device === device,
+                      self.focusSelection?.id == selection.id,
+                      (device.activePrimaryConstituent ?? device).uniqueID == primaryID else { return }
+                do {
+                    try device.lockForConfiguration()
+                    self.resetFocusLocked(device)
+                    device.unlockForConfiguration()
+                    let feedback = CameraFocusFeedback(id: UUID(), point: nil, phase: .resumed)
+                    self.publish { $0.focusFeedback = feedback }
+                    self.writeConfigurationReport()
+                } catch { self.publish { $0.message = error.localizedDescription } }
+            }
+        }
+        focusPrimaryID = primary.uniqueID
+        if var selection = focusSelection, selection.phase == .locking,
+           device.focusMode == .locked, !device.isAdjustingFocus, !primary.isAdjustingFocus {
+            selection.phase = .locked
+            focusSelection = selection
+            publish { $0.focusFeedback = selection }
+            writeConfigurationReport()
+        }
+        if var selection = focusSelection, selection.phase == .locked, device.focusMode != .locked {
+            selection.phase = .tracking
+            focusSelection = selection
+            publish { $0.focusFeedback = selection }
+        }
+        let label: String
+        if !primary.isFocusModeSupported(.continuousAutoFocus) && !primary.isFocusModeSupported(.autoFocus) {
+            label = "此镜头为固定对焦"
+        } else if focusSelection?.phase == .locking {
+            label = "正在对焦后锁定"
+        } else if device.focusMode == .locked {
+            label = "焦点已锁定"
+        } else {
+            label = "连续自动对焦"
+        }
+        publish { if $0.focusLabel != label { $0.focusLabel = label } }
+    }
+
     private func publishZoom(_ device: AVCaptureDevice, force: Bool = false) {
         let now = CMClockGetTime(CMClockGetHostTimeClock()).seconds
         guard force || now - lastZoomPublish >= 0.1 else { return }
@@ -404,18 +506,16 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         case .builtInTelephotoCamera: label = "长焦"
         default: label = "自动"
         }
-        let focus = primary.focusMode == .continuousAutoFocus ? "连续自动对焦" : "此镜头为固定对焦"
+        refreshFocusStatus(device)
         publish {
             if $0.zoomRange != range { $0.zoomRange = range }
             if abs($0.zoom - value) > 0.001 { $0.zoom = value }
             if $0.activeLensLabel != label { $0.activeLensLabel = label }
-            if $0.focusLabel != focus { $0.focusLabel = focus }
         }
     }
 
     /// Caller holds the device configuration lock. Reapply after format changes.
     private func applyRecordingControlsLocked(_ device: AVCaptureDevice, policy: CaptureExposurePolicy? = nil) throws {
-        if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
         guard device.isExposureModeSupported(.continuousAutoExposure) else {
             throw CaptureFailure.message("此镜头不支持所需的自动曝光。")
         }
@@ -482,6 +582,9 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         let maximum = device.activeMaxExposureDuration.seconds
         let size = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
         let report: [String: Any] = ["focus_mode": device.focusMode.rawValue,
+            "focus_point": [device.focusPointOfInterest.x, device.focusPointOfInterest.y],
+            "focus_adjusting": device.isAdjustingFocus,
+            "user_focus_lock_requested": focusSelection?.persistent ?? false,
             "camera": device.deviceType.rawValue, "virtual_camera": device.isVirtualDevice,
             "constituent_devices": device.constituentDevices.map { $0.deviceType.rawValue },
             "active_camera_observed": (device.activePrimaryConstituent ?? device).deviceType.rawValue,
@@ -511,7 +614,17 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         }
     }
 
-    func startRecording() {
+    @MainActor func startRecording() {
+        guard phase == .ready, !startingRecording else { return }
+        startingRecording = true
+        Task {
+            let entitled = await ProAccess.shared.refresh()
+            let maximumDuration = RecordingLimitPolicy.maximumDuration(hasPro: entitled)
+            startingRecording = false
+            startRecording(maximumDuration: maximumDuration)
+        }
+    }
+    private func startRecording(maximumDuration: Double?) {
         queue.async { [self] in
             guard wantsActive, session.isRunning, !session.isInterrupted, recorder == nil, !isFinishing,
                   let device = cameraInput?.device, let connection = videoOutput.connection(with: .video) else { return }
@@ -537,7 +650,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
                     defer { device.unlockForConfiguration() }
                     try applyRecordingControlsLocked(device)
                 }
-                let recording = try RecordingWriter(root: Self.recordingsRoot, device: device, connection: connection, rotationDegrees: recordingRotationDegrees, exposurePolicy: activeExposurePolicy.rawValue, captureFormat: activeCaptureFormat)
+                let recording = try RecordingWriter(root: Self.recordingsRoot, device: device, connection: connection, rotationDegrees: recordingRotationDegrees, exposurePolicy: activeExposurePolicy.rawValue, captureFormat: activeCaptureFormat, maximumDuration: maximumDuration)
                 recorder = recording
                 acceptsMotion = true
                 for kind in ["gyro", "accelerometer", "gravity"] {
@@ -560,6 +673,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     private func stopOnQueue(reason: String) {
         guard let recording = recorder, !isFinishing else { if recorder == nil { endFinishingTask() }; return }
         isFinishing = true; startTimeout?.cancel(); startTimeout = nil
+        recordingLimitTimeout?.cancel(); recordingLimitTimeout = nil
         publish { $0.phase = .finishing }
         // Keep a short IMU tail; no further video or audio is accepted once stop is requested.
         queue.asyncAfter(deadline: .now() + 0.15) { [self] in
@@ -568,7 +682,10 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
                 recorder = nil; isFinishing = false
                 if !wantsActive { stopMotion() }
                 switch result {
-                case let .success(directory): publish { $0.latestDirectory = directory }
+                case let .success(directory): publish {
+                    $0.latestDirectory = directory
+                    if reason == "free_recording_limit" { $0.message = "已录满免费 1 分钟，视频已保存，将自动生成稳定视频。解锁 Pro 可连续录制更久。" }
+                }
                 case let .failure(error): publish { $0.message = error.localizedDescription }
                 }
                 let nextPhase: CameraPhase = wantsActive && session.isRunning && !session.isInterrupted ? .ready : .unavailable
@@ -626,7 +743,24 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         guard let recording = recorder, !isFinishing else { return }
         do {
             if output === videoOutput, let device = cameraInput?.device {
+                if recording.reachedLimit(before: sampleBuffer) {
+                    stopOnQueue(reason: "free_recording_limit"); return
+                }
+                let wasFirstFrame = recording.manifest.videoFrames == 0
                 try recording.appendVideo(sampleBuffer, device: device, connection: connection, clock: session.synchronizationClock)
+                if wasFirstFrame, recording.manifest.videoFrames > 0, let limit = recording.maximumDuration {
+                    // Fallback if the camera stops delivering callbacks near the limit.
+                    let timeout = DispatchWorkItem { [weak self, weak recording] in
+                        guard let self, let recording, self.recorder === recording else { return }
+                        self.stopOnQueue(reason: "free_recording_limit")
+                    }
+                    recordingLimitTimeout = timeout
+                    queue.asyncAfter(deadline: .now() + limit, execute: timeout)
+                }
+                if RecordingLimitPolicy.reached(duration: recording.manifest.durationSeconds, maximumDuration: recording.maximumDuration) {
+                    publish { $0.duration = recording.manifest.durationSeconds }
+                    stopOnQueue(reason: "free_recording_limit"); return
+                }
                 let now = CMClockGetTime(CMClockGetHostTimeClock()).seconds
                 if now - lastUIPublish > 0.2 {
                     let duration = recording.manifest.durationSeconds
@@ -652,6 +786,75 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         do { try recorder.drop("video", pts: CMSampleBufferGetPresentationTimeStamp(sampleBuffer), reason: reason.map { String(describing: $0) } ?? "capture_drop") }
         catch { fail(error) }
     }
+
+    #if DEBUG
+    private struct FocusCheckSnapshot: Sendable {
+        let deviceID: String
+        let mode: Int
+        let x: Double
+        let y: Double
+        let contract: String
+    }
+    private func focusCheckSnapshot() async throws -> FocusCheckSnapshot {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { [self] in
+                guard recorder == nil, !isFinishing, session.isRunning,
+                      let device = cameraInput?.device, let connection = videoOutput.connection(with: .video),
+                      let clock = session.synchronizationClock else {
+                    continuation.resume(throwing: InputError("对焦验证需要空闲的相机预览。")); return
+                }
+                let contract = "\(device.uniqueID)|\(ObjectIdentifier(clock))|\(activeCaptureFormat.id)|\(device.activeVideoMinFrameDuration)|\(device.activeVideoMaxFrameDuration)|\(device.activeMaxExposureDuration)|\(device.exposureMode.rawValue)|\(connection.videoRotationAngle)|\(connection.activeVideoStabilizationMode.rawValue)"
+                continuation.resume(returning: FocusCheckSnapshot(deviceID: device.uniqueID,
+                    mode: device.focusMode.rawValue, x: device.focusPointOfInterest.x,
+                    y: device.focusPointOfInterest.y, contract: contract))
+            }
+        }
+    }
+    /// Device-only regression runner: exercises the same focus entry point as preview gestures.
+    /// No recording, synthetic success states, or production UI controls are added.
+    @MainActor func validateFocusControls() async {
+        let url = Self.recordingsRoot.deletingLastPathComponent().appendingPathComponent("focus-controls-validation.json")
+        var result: [String: Any] = ["passed": false]
+        var originalID: String?
+        do {
+            for _ in 0..<50 {
+                if phase == .ready { break }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            let baseline = try await focusCheckSnapshot()
+            originalID = baseline.deviceID
+            focus(at: CGPoint(x: 0.37, y: 0.61), deviceID: baseline.deviceID, lock: false)
+            try await Task.sleep(nanoseconds: 300_000_000)
+            let tracking = try await focusCheckSnapshot()
+            guard tracking.mode == AVCaptureDevice.FocusMode.continuousAutoFocus.rawValue,
+                  abs(tracking.x - 0.37) < 0.0001, abs(tracking.y - 0.61) < 0.0001 else { throw InputError("点按对焦未按请求生效。") }
+            focus(at: CGPoint(x: 0.37, y: 0.61), deviceID: baseline.deviceID, lock: true)
+            var locked = try await focusCheckSnapshot()
+            for _ in 0..<60 {
+                if locked.mode == AVCaptureDevice.FocusMode.locked.rawValue { break }
+                try await Task.sleep(nanoseconds: 100_000_000)
+                locked = try await focusCheckSnapshot()
+            }
+            guard locked.mode == AVCaptureDevice.FocusMode.locked.rawValue else { throw InputError("自动对焦尚未完成锁定。") }
+            focus(at: CGPoint(x: 0.1, y: 0.1), deviceID: "stale-preview-device", lock: false)
+            try await Task.sleep(nanoseconds: 150_000_000)
+            let stale = try await focusCheckSnapshot()
+            guard stale.mode == locked.mode, stale.x == locked.x, stale.y == locked.y else { throw InputError("旧预览请求不应修改当前对焦。") }
+            focus(at: CGPoint(x: 0.5, y: 0.5), deviceID: baseline.deviceID, lock: false)
+            try await Task.sleep(nanoseconds: 300_000_000)
+            let restored = try await focusCheckSnapshot()
+            guard restored.mode == AVCaptureDevice.FocusMode.continuousAutoFocus.rawValue,
+                  [tracking, locked, stale, restored].allSatisfy({ $0.contract == baseline.contract }) else { throw InputError("恢复自动对焦或采集配置保持检查失败。") }
+            result = ["passed": true, "tap_point": [tracking.x, tracking.y], "tap_mode": tracking.mode,
+                      "locked_mode": locked.mode, "restored_mode": restored.mode,
+                      "stale_request_ignored": true, "capture_clock_format_exposure_orientation_unchanged": true]
+        } catch { result["error"] = error.localizedDescription }
+        if let originalID { focus(at: CGPoint(x: 0.5, y: 0.5), deviceID: originalID, lock: false) }
+        if let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys, .prettyPrinted]) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+    #endif
 
     private func checkDisk(minimum: Int64) throws {
         try FileManager.default.createDirectory(at: Self.recordingsRoot, withIntermediateDirectories: true)

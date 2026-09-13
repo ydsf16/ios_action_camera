@@ -1,0 +1,32 @@
+{
+  "identifier": "C03F0BB3-1381-4DA5-B6B8-A4A069DC86D1",
+  "nonRenewingSubscriptions": [],
+  "products": [
+    {
+      "displayPrice": "20",
+      "familyShareable": false,
+      "internalID": "891270346",
+      "localizations": [
+        {
+          "description": "永久解锁超过一分钟的连续录制",
+          "displayName": "RoamShot Pro 永久解锁",
+          "locale": "zh_CN"
+        }
+      ],
+      "productID": "com.grape.RoamShot.pro.lifetime",
+      "referenceName": "RoamShot Pro Lifetime",
+      "type": "NonConsumable"
+    }
+  ],
+  "settings": {
+    "_failTransactionsEnabled": false,
+    "_locale": "zh_CN",
+    "_storefront": "CHN",
+    "_storeKitErrors": []
+  },
+  "subscriptionGroups": [],
+  "version": {
+    "major": 3,
+    "minor": 0
+  }
+}

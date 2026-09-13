@@ -1,0 +1,1 @@
+Standard SPDX license texts from license-list-data v3.27.0. Used only where a locked crate declares that license but omits a license file from its published source. These standard texts are identified separately from upstream notices; crate author metadata is retained in the inventory.

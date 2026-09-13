@@ -70,7 +70,7 @@ validation outputs, not an in-app short-preview feature.
 swift test
 cargo test --manifest-path Engine/Cargo.toml --release --locked
 scripts/benchmark_export.sh --horizon-pixel-test
-python3 scripts/check_app_linkage.py build-device/Build/Products/Release-iphoneos/MotionCam.app
+python3 scripts/check_app_linkage.py build-device/Build/Products/Release-iphoneos/RoamShot.app
 ```
 
 ## References

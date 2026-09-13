@@ -1,0 +1,16 @@
+{
+  "package": "naga",
+  "version": "26.0.0",
+  "repo": "https://github.com/gfx-rs/wgpu",
+  "ref": "03f1b535ca2356d4d490540e76480b0116cf7d7f",
+  "files": [
+    {
+      "name": "LICENSE.APACHE",
+      "url": "https://raw.githubusercontent.com/gfx-rs/wgpu/03f1b535ca2356d4d490540e76480b0116cf7d7f/LICENSE.APACHE"
+    },
+    {
+      "name": "LICENSE.MIT",
+      "url": "https://raw.githubusercontent.com/gfx-rs/wgpu/03f1b535ca2356d4d490540e76480b0116cf7d7f/LICENSE.MIT"
+    }
+  ]
+}

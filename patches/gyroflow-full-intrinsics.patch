@@ -6,7 +6,7 @@ index bec9796..1674f95 100644
  #[derive(Default, Clone, Debug, serde::Serialize, serde::Deserialize)]
  #[serde(default)]
  pub struct LensParams {
-+    /// MotionCam: full row-major K in calibration pixel coordinates.
++    /// RoamShot: full row-major K in calibration pixel coordinates.
 +    pub camera_matrix: Option<[f64; 9]>,
      pub focal_length: Option<f32>, // millimeters
      pub pixel_pitch: Option<(u32, u32)>, // nanometers

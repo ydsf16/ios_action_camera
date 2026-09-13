@@ -4,7 +4,7 @@ import Foundation
     @MainActor static func main() async throws {
         guard CommandLine.arguments.count == 2 else { fatalError("Supply a synthetic fixture directory") }
         let fixture = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("motioncam-cancellation-\(UUID().uuidString)", isDirectory: true)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("roamshot-cancellation-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let directory = root.appendingPathComponent("clip", isDirectory: true)
