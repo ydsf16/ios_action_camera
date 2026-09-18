@@ -40,7 +40,8 @@ enum StabilizationProcessor {
         guard roamshot_engine_report(engine, &value) == 0 else { throw InputError("无法读取稳定处理结果。") }
         return StabilizationReport(requestedSmoothingSeconds: value.requested_smoothing_seconds,
             effectiveSmoothingSeconds: value.effective_smoothing_seconds, minimumCrop: value.minimum_crop, maximumCrop: value.maximum_crop,
-            requestedHorizonPercent: value.requested_horizon_percent, effectiveHorizonPercent: value.effective_horizon_percent)
+            requestedHorizonPercent: value.requested_horizon_percent, effectiveHorizonPercent: value.effective_horizon_percent,
+            locallyAdjusted: value.locally_adjusted > 0.5)
     }
     private static func validateTransform(_ transform: CGAffineTransform, config: StabilizationInput) throws {
         guard config.options.horizonLock else { return }

@@ -137,12 +137,19 @@ struct ClipPreviewView: View {
                     Button { player?.pause(); showAdjustment = true } label: {
                         Label("调整", systemImage: "slider.horizontal.3").frame(minWidth: 64, minHeight: 32)
                     }.buttonStyle(.bordered).tint(AppTheme.accent).disabled(busy || saving)
+                    ShareLink(item: playbackURL) {
+                        Image(systemName: "square.and.arrow.up").frame(minWidth: 32, minHeight: 32)
+                    }.buttonStyle(.bordered).tint(AppTheme.accent)
+                        .accessibilityLabel(hasStable && !showOriginal ? "分享稳定视频" : "分享原片")
+                        .accessibilityIdentifier("shareVideo")
+                        .disabled(saving || busy || library.deleting)
+                        .simultaneousGesture(TapGesture().onEnded { player?.pause() })
                     Button {
                         Task { await saveToPhotos() }
                     } label: {
                         HStack(spacing: 8) {
                             if saving { ProgressView().tint(AppTheme.accent) }
-                            else { Image(systemName: saved ? "checkmark" : "square.and.arrow.up") }
+                            else { Image(systemName: saved ? "checkmark" : "square.and.arrow.down") }
                             Text(saving ? "正在导出…" : saved ? "已保存 · 再次导出" : hasStable && !showOriginal ? "导出视频" : "导出原片")
                         }.font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 32)
                     }.buttonStyle(PrimaryActionStyle(color: saved ? AppTheme.success : AppTheme.accent, completed: saved)).disabled(saving || busy)

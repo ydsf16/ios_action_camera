@@ -8,32 +8,38 @@ public struct StabilizationReport: Codable, Equatable, Sendable {
     public let maximumCrop: Double
     public let requestedHorizonPercent: Double?
     public let effectiveHorizonPercent: Double?
+    /// Absent on receipts created before local crop-aware smoothing was introduced.
+    public let locallyAdjusted: Bool?
     public var cropLimited: Bool { effectiveSmoothingSeconds + 1e-9 < requestedSmoothingSeconds }
     public var horizonReduced: Bool { (effectiveHorizonPercent ?? 0) + 1e-9 < (requestedHorizonPercent ?? 0) }
-    public var adjusted: Bool { cropLimited || horizonReduced }
+    public var localAdjustmentApplied: Bool { locallyAdjusted ?? false }
+    public var adjusted: Bool { cropLimited || horizonReduced || localAdjustmentApplied }
     public var unstabilizedFallback: Bool {
         (requestedSmoothingSeconds > 0 || (requestedHorizonPercent ?? 0) > 0)
             && effectiveSmoothingSeconds == 0 && effectiveHorizonPercent == 0
     }
     public var summary: String {
         if unstabilizedFallback { return "运动超出稳定范围 · 仅调整画幅" }
+        if localAdjustmentApplied && !horizonReduced { return "已局部适配剧烈运动" }
         if adjusted { return "已根据运动自动调整" }
         return requestedSmoothingSeconds == 0 && (effectiveHorizonPercent ?? 0) == 0 ? "平滑已关闭" : "已按设定效果处理"
     }
     public var details: String {
         var parts: [String] = []
         if unstabilizedFallback { parts.append("本次未能提供稳定效果，已保留原片及画幅调整后的结果。") }
+        if localAdjustmentApplied { parts.append("为避免黑边，仅在接近裁切上限的区间减弱了稳定修正。") }
         if cropLimited { parts.append(String(format: "为保留画面，平滑从 %.2f 秒调整为 %.2f 秒。", requestedSmoothingSeconds, effectiveSmoothingSeconds)) }
         if horizonReduced { parts.append(String(format: "保持水平从 %.0f%% 调整为 %.0f%%。", requestedHorizonPercent ?? 0, effectiveHorizonPercent ?? 0)) }
         parts.append(String(format: "实际裁切 %.1f× – %.1f×。", minimumCrop, maximumCrop))
         return parts.joined(separator: "\n")
     }
     public init(requestedSmoothingSeconds: Double, effectiveSmoothingSeconds: Double, minimumCrop: Double, maximumCrop: Double,
-                requestedHorizonPercent: Double? = nil, effectiveHorizonPercent: Double? = nil) {
+                requestedHorizonPercent: Double? = nil, effectiveHorizonPercent: Double? = nil, locallyAdjusted: Bool? = false) {
         self.requestedSmoothingSeconds = requestedSmoothingSeconds
         self.effectiveSmoothingSeconds = effectiveSmoothingSeconds
         self.minimumCrop = minimumCrop; self.maximumCrop = maximumCrop
         self.requestedHorizonPercent = requestedHorizonPercent; self.effectiveHorizonPercent = effectiveHorizonPercent
+        self.locallyAdjusted = locallyAdjusted
     }
     public struct Receipt: Decodable, Sendable {
         public let options: StabilizationOptions

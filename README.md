@@ -1,111 +1,105 @@
-# RoamShot · iPhone 运动相机
+# RoamShot
 
-应用显示名称为 **RoamShot**，桌面图标使用青绿色镜头与运动轨迹符号。应用标识与现有安装保持一致，覆盖升级保留素材和设置。见[图标与改名验证](docs/design/roamshot/README.md)。
+**把 iPhone 变成运动相机。** RoamShot 在拍摄视频的同时记录运动数据，拍摄后在手机上生成稳定视频。适合旅行、徒步、日常走拍，以及放大拍摄后的防抖处理。
 
-首版交互：**拍摄 → 预览 → 保存**。支持调节稳定强度、裁切倍数、动态裁切、黑边与重力水平锁定。见[已确认 UI](docs/design/README.md)。
+使用流程：**拍摄 → 查看稳定结果 → 调整效果 → 保存到相册**。原片始终保留，直到用户主动删除素材。
 
-## 当前版本：0.10.1（RoamShot 名称与应用图标）
+## 功能
 
-拍摄预览支持**轻点选择对焦位置、长按对焦后锁定、再次轻点恢复连续自动对焦**；录制中也可操作。设置 → 拍摄辅助提供九宫格参考线，默认关闭并记住选择，只显示在预览中。自动切换物理镜头时恢复自动对焦并提示，固定对焦镜头提示不支持点按。曝光上限和视频／IMU 坐标约定保持不变。见[对焦与参考线验证](docs/focus-grid-validation.md)。
+- 全屏取景、自动横竖屏、自动对焦、轻点对焦、长按锁定与默认开启的九宫格。
+- 支持设备可用的 1080p / 4K、24 / 30 / 60 fps；默认 4K60。
+- 双指与滑条变焦，初始优先 0.5×，不支持时使用 1×；上限 10×（受设备能力限制）；兼容设备使用虚拟相机自动切换物理镜头。
+- iOS 17.2+ 接入系统拍摄按键控制录像；iOS 18+ 兼容设备支持相机控制按钮滑动变焦。外接设备的支持边界见[控制器说明](docs/capture-controls-validation.md)。
+- 曝光选项：自动、≤10 ms、≤5 ms、≤2 ms；默认 ≤5 ms。短曝光减少运动模糊，需要充足光线；灯光下可能出现闪烁。
+- 自然、标准、强力三种稳定效果；重力水平锁定放在高级设置，默认关闭。
+- 高级设置支持平滑强度、保留画面（宽高的 20%～100%）、动态缩放与允许黑边。动态裁切指定最少保留比例，固定裁切指定实际保留比例；默认 50%。
+- 未允许黑边时，Gyroflow 会在接近裁切上限的时间区间局部减弱稳定修正，并平滑过渡；不会因短暂剧烈运动降低整段视频的稳定强度。
+- 输出可选 1080p 或 2.8K，默认 2.8K，保留原片时间戳与声音。输出尺寸在生成前设置；保存到相册直接使用已生成的视频。
+- 素材管理支持原片与稳定结果播放、系统分享、重新处理、单段及批量删除。分享当前选中的视频，无需先保存到相册。
 
-普通页面提供 **自然／标准／强力** 与 **保持水平**；精确强度、裁切、黑边与缩放过渡放入“高级设置”。新设置默认使用标准效果，旧设置保留为自定义，选择预设后启用自动适配。自动模式在本段素材的裁切范围内协调平滑和水平锁定，并说明实际调整；手动组合无法满足时，生成前提供“一键使用推荐设置”。原片和上一版结果保留到新版本成功生成。在拍摄前的默认设置或素材的“调整”中选择输出分辨率，稳定处理一次生成目标尺寸。导出直接保存当前视频，不再选择尺寸或触发重新稳定。见[简单交互与适配验证](docs/simple-stabilization-validation.md)与[输出分辨率验证](docs/output-resolution-validation.md)。
+免费版每段最多录制 **60 秒**，到时自动停止并保存，不限次数；稳定处理与导出免费、无水印。设置中的 **RoamShot Pro** 一次买断解除单段录制时长限制，支持恢复购买。拍摄时不弹出购买提示，实际价格以商店为准。
 
-稳定参数新增独立的“重力水平锁定”开关，使用录制的 `CoreMotion.gravity`，默认关闭以保留原效果。锁定画面水平时仍可转向和俯仰，接近朝天／朝地时逐渐减弱锁定。支持四种录像方向，不改变原始 IMU、像素、内参或时钟映射；重力缺失或采样不完整时明确报错。未加入短片预览。见[重力锁定验证](docs/gravity-horizon-validation.md)。
+## 运行要求与使用边界
 
-稳定强度增加“超强”范围，平滑上限从 4 秒提高至 10 秒，0% 关闭平滑。旧设置按实际平滑时间迁移，保留原效果。裁切可选择动态／固定，边缘策略明确为“画面完整优先／稳定优先（允许黑边）”；切换策略保留裁切设置。处理完成后显示实际裁切及是否因裁切限制降低了强度。高级设置提供动态缩放过渡时间。见[参数验证记录](docs/stabilization-controls-validation.md)。
+- iPhone，iOS 17 或更新版本；拍摄规格由设备和镜头决定。
+- 允许相机、麦克风和运动访问；保存到相册时请求添加照片权限。
+- 所有素材与处理均在本机完成，无需登录，不包含云端处理或分析 SDK。
+- 稳定处理仅支持本 App 同步记录运动数据的素材。
+- 录制开始时确定视频方向；录制中转动手机不会改变该段文件的显示方向。
+- 几何稳定无法消除已经拍入的运动模糊。高倍率、暗光、镜头切换和剧烈运动仍可能降低效果。
+- 逐帧内参不等于完整镜头标定；当前未实现滚动快门校正。请求关闭系统视频防抖，不代表能够保证所有设备的 OIS 都关闭。
 
-预览和录像方向分别由 Apple `RotationCoordinator` 提供。开启系统竖排方向锁定时，界面保持竖排，录像仍按开始拍摄时的手机实际方向保存；关闭锁定后界面可自动横竖屏。录制途中旋转手机不会改变本段文件的显示方向。
+切到后台会停止录制并保存。回到拍摄页面时自动恢复取景；保持素材页时不会强制跳回相机。处理中切到后台会取消本次导出并保留任务，回前台自动重新处理；目前会从头生成，不是逐帧断点续传。手动取消不自动重启。任务队列目前仅保存在进程中，不保证系统终止 App 后自动恢复。
 
-录制中可双指缩放、展开倍率滑条，或点击倍率按钮平滑变焦。兼容设备优先使用虚拟相机，由系统选择超广角／广角／长焦；倍率按系统显示口径换算，本版最高提供 5×。保留逐帧内参和原视频／IMU 时钟映射，详见[变焦验证与边界](docs/zoom-validation.md)。
+**当前采用拍后稳定。** 拍摄时暂停已有处理，优先保证采集。边录边稳定仍处于设计阶段，见[流式稳定方案](docs/design/streaming-stabilization.md)。
 
-设置采用深蓝灰背景与分组卡片，青绿色表示主要操作，蓝色表示稳定强度，紫色表示裁切。输出分辨率在“稳定与输出”设置中使用可直接点选的卡片；播放页突出导出按钮，保存成功后显示绿色勾选反馈。见[配色与界面验证](docs/design/settings-color.md)。
+## 技术结构
 
-素材页按日期分组，可长按删除、批量选择并查看预计释放空间；删除会一并清理原片、稳定结果和运动数据，保留系统相册中的独立副本。处理中的素材先取消并等待工作线程退出，再删除。播放页保留全屏画面，顶部切换「原片／稳定」，底部「调整／导出」，更多菜单提供素材信息和删除。见[设计说明](docs/design/library-refinement.md)与[验证记录](docs/library-validation.md)。
+```text
+AVFoundation 视频 / 音频 + CoreMotion IMU + 逐帧内参
+                         ↓
+              本机录制包（原片与传感器数据）
+                         ↓
+         Gyroflow 姿态估计、平滑与裁切（CPU）
+                         ↓
+           NV12 / IOSurface 重投影（Metal）
+                         ↓
+           AVFoundation 编码与音频封装
+                         ↓
+                 稳定视频 → 系统相册
+```
 
-点击取景器顶部格式或进入设置，可选择当前镜头支持的 **1080p / 4K × 24 / 30 / 60 fps**。
-首次使用默认 **4K / 60 fps、曝光上限 5 ms、2.8K / 60 fps 输出**。升级时将旧的全局输出默认值一次性迁移到 2.8K，保留稳定参数与已有素材；此后手动选择的分辨率仍会记住。录制选择会保留，录制中不可更改。拍摄前在“设置 → 默认稳定与输出”选择 **1080p（1920×1080）/ 2.8K（2816×1584）**；已有素材在“调整”中选择后生成。
-导出保留原帧率和时间戳，横竖屏自动适配，输出不超过原片尺寸；1080p 原片不会放大到 2.8K。
+采集使用相机到系统时钟的映射对齐视频与 IMU，保留原始像素、传感器轴向及逐帧内参。默认处理不额外引入视觉估计的时间偏移。Metal 直接处理 NV12 纹理，最多三帧并行，应用避免逐帧 BGRA 转换与 GPU 读回。iPhone 16 的稳定输出已观察到 Apple 硬件 H.264 编码路径；性能受设备、分辨率及温度影响，见[实测记录](docs/performance-build29.md)。
 
-曝光新增“室内折中（≤10 ms）”：保留系统自动曝光和 ISO，限制长曝光拖影。
-它设置曝光上限，不固定快门，也不保证所有 LED 灯光下均无频闪；仍可选择系统自动或 ≤5 ms 运动模式。
+| 目录 | 内容 |
+| --- | --- |
+| `App/Capture` | 相机、运动数据、录制与生命周期 |
+| `App/Stabilization` | 处理队列、Metal 重投影、视频读写 |
+| `App/Views` | 拍摄、设置、素材及播放界面 |
+| `Sources/CaptureCore` | 数据格式、时间轴、采集与稳定参数 |
+| `Engine` | Gyroflow 的 Rust / C 接口 |
+| `vendor/gyroflow` | 固定提交的上游核心 |
+| `patches` | 随应用发布的上游修改 |
+| `Tests` / `scripts` | 自动测试、构建与验证工具 |
+| `docs` | 设计、数据契约、性能及发布记录 |
 
-- SwiftUI 相机界面；优先后置虚拟相机，录制中由系统随变焦与场景选择物理镜头；不兼容时回退单镜头。
-- 自动横竖屏，开始录制时确定该段方向；只改变显示矩阵，保留原始像素／内参／IMU 坐标。
-- 支持选择原生分辨率及帧率，默认 4K / 60fps / SDR；4K60 原片优先使用 HEVC，其余模式和稳定输出使用 H.264，声音为 AAC。不支持的机型使用可用格式回退。
-- 视频与同步运动数据保存到独立素材文件夹。
-- 原片列表、播放、保存到相册；完整文件通过“文件”App 或 Finder 导出。
-- 请求关闭视频防抖，记录实际生效状态；保持原始像素方向并记录逐帧内参。
-- 连续自动对焦（不支持的镜头显示固定对焦）；曝光模式可选系统自动、室内折中（最长 10 ms）或运动清晰（最长 5 ms），保留自动 ISO。视频与 IMU 使用系统时钟映射同步。
-- 处理权限拒绝、空间不足、视频丢帧、传感器中断、相机中断、退后台收尾。
+## 构建与运行
 
-录制结束后自动按预设的输出分辨率和稳定设置生成稳定视频，保留原片与原声音。素材预览可切换原片／稳定结果，并保存当前版本到相册。旧素材可以手动点击「生成稳定视频」。
+需要 macOS、完整 Xcode、Rust stable / rustup。首次构建需要联网获取子模块及锁定依赖。
 
-Gyroflow 1.6.3 核心读取实际录制时钟映射、原始陀螺仪和逐帧完整内参，使用可调平滑与裁切；没有额外视觉时间补偿。当前直接在 IOSurface 的 NV12 纹理上执行 Metal 重投影，保留 Lanczos4 采样，最多 3 帧并行。应用不再做逐帧 BGRA 转换、GPU 上传或读回；Apple 框架负责视频解码、编码和音频封装。姿态、平滑和裁切继续由 CPU 计算。性能数据与边界见 [性能验证](docs/performance-validation.md)。
+```sh
+git clone --recurse-submodules https://github.com/ydsf16/ios_action_camera.git
+cd ios_action_camera
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+./scripts/build_engine.sh aarch64-apple-ios aarch64-apple-ios-sim
+open RoamShot.xcodeproj
+```
 
-当前仅前台处理，开始拍摄时暂停处理，结束后继续；退后台取消当前任务，可回到素材页重试。暂未实现任务持久化、滚动快门校正与热管理。镜头残余畸变尚未标定，不能把逐帧 K 当成完整镜头标定。手机性能、同步精度、音画方向仍需真机验收。系统 OIS 是否关闭不能由 `.off` 保证。
+在 Xcode 中选择 `RoamShot` scheme，为自己的设备配置开发团队和签名，连接已信任且开启开发者模式的 iPhone 后运行。模拟器可验证界面和合成素材处理，不能验证真实相机及 IMU 采集。
 
-## 在 iPhone 运行
+构建脚本固定 Gyroflow 提交并应用 `gyroflow-full-intrinsics.patch` 和 `gyroflow-metal-validation.patch`。因此子模块显示本地修改属于预期情况；不要将其直接重置。新增 Swift 文件后运行 `python3 scripts/generate_project.py` 更新工程。
 
-1. 先按下方说明编译 Rust 核心，再用 Xcode 打开 `RoamShot.xcodeproj`，选择 `RoamShot` scheme。
-2. 连接并信任 iPhone（iOS 17+），按系统提示开启开发者模式。
-3. 在 Signing & Capabilities 中确认你的开发团队。工程已沿用 SensorRecorder 的团队配置，Bundle ID 为 `com.grape.RoamShot`。
-4. 选择 iPhone，点击 Run，允许相机、麦克风和运动访问。
-5. 拍摄约 15 秒：静止几秒、左右转动、走几步，再停止。
-6. 点击左下角素材入口，等待稳定处理，切换原片与稳定结果并检查声音；需要时保存到相册。
-7. 从“文件 → 我的 iPhone → RoamShot → Recordings”导出整段文件夹，按[真机验收](docs/recording-validation.md)检查。
-
-模拟器可用合成素材验证处理与界面，不支持本项目的真实 Camera / IMU 录制。
-
-## 开发与验证
+## 验证
 
 ```sh
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-# 先安装 Rust stable / rustup，然后：
-./scripts/build_engine.sh aarch64-apple-ios aarch64-apple-ios-sim
-cargo test --manifest-path Engine/Cargo.toml --release --locked
 swift test
+cargo test --manifest-path Engine/Cargo.toml --release --locked
 python3 -m unittest discover -s Tests/AuditTests -v
 xcodebuild -project RoamShot.xcodeproj -scheme RoamShot \
   -configuration Release -destination 'generic/platform=iOS' \
   -derivedDataPath build-device CODE_SIGNING_ALLOWED=NO
 ```
 
-首次构建需要联网获取 Gyroflow 子模块和锁定的 Rust 依赖。构建脚本检查上游提交并应用 `patches/gyroflow-full-intrinsics.patch`，因此子模块显示本地修改是预期状态；完整修改以该补丁随源码发布。成品编译后运行 `python3 scripts/check_app_linkage.py <RoamShot.app路径>`，确保未误连开发机上的动态库。新增 Swift 文件后运行 `python3 scripts/generate_project.py` 更新工程；生成文件一并提交。
+打包后运行 `python3 scripts/check_app_linkage.py <RoamShot.app路径>` 检查动态库依赖。真机验收应使用相同设备和素材，对比录制帧率、输出尺寸、声音、处理耗时和温度；构建通过不能替代真机验收。
 
-## 结构
+- [录制数据格式与时间、轴向约定](docs/recording-format.md)
+- [真机录制验收](docs/recording-validation.md)
+- [稳定参数与适配](docs/simple-stabilization-validation.md)
+- [发布构建及审核记录](docs/app-store/release-validation.md)
 
-| 路径 | 职责 |
-| --- | --- |
-| `App/Capture` | AVFoundation、CoreMotion、文件录制和生命周期 |
-| `Sources/CaptureCore` | 数据契约、时间轴与 CSV 写入；可供其他采集产品复用 |
-| `App/Views` | 拍摄、素材、原片／稳定结果预览与相册保存 |
-| `App/Stabilization` | 前台队列、视频读写、原音频保留与取消 |
-| `Engine` / `vendor/gyroflow` | Rust C 接口与固定版本 Gyroflow 核心 |
-| `Tests/CaptureCoreTests` | 时间戳、丢帧间隔、运动预缓存和文件收尾测试 |
-| `docs/recording-format.md` | 录制包、坐标、时间与内参约定 |
+开发进展与历史验证记录保存在 `docs/`；发布源码通过 Git 版本标签定位。
 
-本项目依据 SensorRecorder 已验证的采集约定独立实现；现有 SensorRecorder 工程未修改，两者目前没有共享同一个二进制采集库。待录制验收后再提取共享模块。
+## 开源许可
 
-## 分步实现
-
-1. **录制闭环**：已实现。
-2. **稳定处理**：0.2.0 已接通 CPU 核心与拍后导出，验证范围见 [处理验收](docs/stabilization-validation.md)。
-3. **简单调整**：已支持强度、最大裁切、动态裁切、允许黑边与重力水平锁定。
-4. **处理与导出队列**：拍摄优先、进度、热管理、可恢复任务。
-5. **产品化**：机型覆盖、性能验收、付费与发布。
-
-录制素材仅保存在设备上；本版本不包含分析 SDK、云上传或收费功能。
-
-## 许可证
-
-GPL-3.0-or-later，附 App Store 许可，详见 [LICENSE](LICENSE) 与 [第三方说明](THIRD_PARTY_NOTICES.md)。本仓库提供应用、核心补丁、依赖锁文件和构建脚本；对应构建使用版本标签归档源码；完整依赖声明见 THIRD_PARTY_LICENSES.txt，可用 scripts/generate_licenses.py 重新生成。
-
-## 方向与稳定参数
-
-- 设置 → 默认稳定与输出：拍摄前保存输出分辨率和稳定效果，之后新建任务直接按该设置生成。
-- 素材 → 预览 → 调整：选择效果和输出分辨率，先检查参数再生成；原片和上一版结果保留到成功替换。
-- 普通模式自动协调裁切与效果；“处理说明”显示实际降低的平滑时间和水平锁定程度。极端情况下仅能调整画幅时明确标注未能提供稳定效果。
-- 高级参数修改后进入自定义模式；选择自然／标准／强力可以恢复自动适配。
-- 稳定强度 0–100% 使用非线性刻度，对应 0–10 秒平滑时间。最大裁切 1–5×：动态时是倍数上限，固定时使用该实际倍数。
-- “稳定优先”保留选定平滑强度，在裁切不足的区域填黑；“画面完整优先”逐步降低平滑强度并显示裁切限制提示，仍无法满足上限则报错。极端运动下的边缘覆盖仍需实拍验收。
-- 每段保存 stabilization-options.json；stabilization.json 中记录完成输出的选项。
+本项目采用 GPL-3.0-or-later，并附 App Store 许可，详见 [LICENSE](LICENSE)、[第三方说明](THIRD_PARTY_NOTICES.md)及 [依赖许可](THIRD_PARTY_LICENSES.txt)。源码发布包含应用、固定的上游核心、补丁、依赖锁文件和构建脚本。

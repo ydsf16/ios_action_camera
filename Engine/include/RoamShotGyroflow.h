@@ -13,6 +13,7 @@ typedef struct {
     double maximum_crop;
     double requested_horizon_percent;
     double effective_horizon_percent;
+    double locally_adjusted;
 } RoamShotStabilizationReport;
 RoamShotGyroflowEngine *roamshot_engine_create(const char *json, char *error, size_t capacity);
 int32_t roamshot_engine_report(const RoamShotGyroflowEngine *engine, RoamShotStabilizationReport *report);

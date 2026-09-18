@@ -38,9 +38,9 @@ enum StabilizationParameterValidation {
             guard let receipt = StabilizationReport.load(directory: directory), receipt.options == options else { throw InputError("Export report/options mismatch") }
             let report = receipt.stabilization
             guard abs(report.requestedSmoothingSeconds-seconds) < 1e-9,
-                  report.cropLimited == !allow,
+                  report.localAdjustmentApplied == (!allow && seconds > 0),
                   abs(report.maximumCrop-crop) < 1e-9,
-                  !allow || abs(report.effectiveSmoothingSeconds-seconds) < 1e-9 else { throw InputError("Incorrect effective smoothing/crop diagnostics") }
+                  abs(report.effectiveSmoothingSeconds-seconds) < 1e-9 else { throw InputError("Incorrect effective smoothing/crop diagnostics") }
             let asset = AVURLAsset(url: output)
             let track = try await asset.loadTracks(withMediaType: .video)[0]
             let reader = try AVAssetReader(asset: asset)

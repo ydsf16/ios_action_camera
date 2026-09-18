@@ -75,6 +75,18 @@ final class StabilizationOptionsTests: XCTestCase {
         let legacy = try JSONDecoder().decode(StabilizationReport.self, from: old)
         XCTAssertFalse(legacy.horizonReduced)
         XCTAssertFalse(legacy.unstabilizedFallback)
+        XCTAssertFalse(legacy.localAdjustmentApplied)
+
+        let local = StabilizationReport(requestedSmoothingSeconds: 3, effectiveSmoothingSeconds: 3,
+            minimumCrop: 1, maximumCrop: 2, requestedHorizonPercent: 100,
+            effectiveHorizonPercent: 100, locallyAdjusted: true)
+        XCTAssertTrue(local.adjusted)
+        XCTAssertFalse(local.cropLimited)
+        XCTAssertFalse(local.horizonReduced)
+        XCTAssertTrue(local.summary.contains("局部"))
+        XCTAssertTrue(local.details.contains("接近裁切上限的区间"))
+        XCTAssertEqual(try JSONDecoder().decode(StabilizationReport.self,
+            from: JSONEncoder().encode(local)), local)
     }
 
     func testOffAndExtendedStrengthSurvivePersistence() throws {

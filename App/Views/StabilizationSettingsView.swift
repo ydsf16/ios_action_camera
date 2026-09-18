@@ -35,11 +35,6 @@ struct StabilizationSettingsView: View {
                 Text(options.preset?.detail ?? "原有设置已保留。选择上方效果可恢复自动适配。")
             }.listRowBackground(AppTheme.surface)
             Section {
-                Toggle(isOn: $options.horizonLock) { SettingsLabel("保持水平", symbol: "level") }
-            } footer: {
-                Text("使用重力方向保持水平，仍可转向和俯仰。自动模式会根据运动调整，完成后可查看说明。")
-            }.listRowBackground(AppTheme.surface)
-            Section {
                 HStack(spacing: 12) {
                     ForEach(ExportResolution.allCases) { resolution in
                         Button { options.exportResolution = resolution } label: {
@@ -58,6 +53,9 @@ struct StabilizationSettingsView: View {
             }.listRowBackground(AppTheme.surface)
             Section {
                 DisclosureGroup("高级设置", isExpanded: $advanced) {
+                    Toggle(isOn: $options.horizonLock) { SettingsLabel("重力水平锁定", symbol: "level") }
+                    Text("使用重力方向保持水平，仍可转向和俯仰；裁切空间不足时可能降低锁定强度。")
+                        .font(.footnote).foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 12) {
                         LabeledContent("稳定强度", value: "\(options.strengthLabel) · \(Int((options.strength * 100).rounded()))%")
                         Slider(value: manual(\.strength), in: 0...1, step: 0.01).tint(AppTheme.blue).accessibilityLabel("稳定强度")
@@ -66,10 +64,19 @@ struct StabilizationSettingsView: View {
                     Picker("裁切方式", selection: manual(\.dynamicCrop)) {
                         Text("动态").tag(true); Text("固定").tag(false)
                     }.pickerStyle(.segmented)
-                    LabeledContent(options.dynamicCrop ? "最大裁切" : "固定裁切", value: String(format: "%.1f×", options.maxCrop))
-                    Slider(value: manual(\.maxCrop), in: 1...5, step: 0.1).tint(AppTheme.violet).accessibilityLabel("裁切倍数")
+                    LabeledContent("保留画面", value: "\(options.dynamicCrop ? "至少保留 " : "保留 ")\(Int((100 / options.maxCrop).rounded()))%")
+                    Slider(value: Binding(get: { 100 / options.maxCrop }, set: { percent in
+                        options.maxCrop = 100 / min(100, max(20, percent))
+                        options.automaticAdjustment = false
+                    }), in: 20...100, step: 1)
+                        .tint(AppTheme.violet).accessibilityLabel("保留画面")
+                        .accessibilityValue("\(options.dynamicCrop ? "至少保留 " : "保留 ")\(Int((100 / options.maxCrop).rounded()))%")
+                    HStack { Text("20%"); Spacer(); Text("100%") }
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("按原画面宽高计算。保留越多，视野越大；保留越少，防抖调整空间越大。")
+                        .font(.footnote).foregroundStyle(.secondary)
                     Toggle("允许黑边", isOn: manual(\.allowBlackBorders))
-                    Text(options.allowBlackBorders ? "保留设定强度和裁切；画面不足处显示黑边。" : "在裁切上限内保留完整画面，必要时降低平滑；无法兼顾时提前提示。")
+                    Text(options.allowBlackBorders ? "按设定强度和保留比例处理，画面不足处显示黑边。" : "优先满足保留比例并避免黑边，只在接近裁切上限的区间减弱稳定修正。")
                         .font(.footnote).foregroundStyle(.secondary)
                     if options.dynamicCrop {
                         LabeledContent("缩放过渡", value: String(format: "%.1f 秒", options.zoomTransitionSeconds))

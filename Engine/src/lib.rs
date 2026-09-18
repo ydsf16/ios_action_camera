@@ -41,6 +41,7 @@ pub struct StabilizationReport {
     requested_smoothing_seconds: f64, effective_smoothing_seconds: f64,
     minimum_crop: f64, maximum_crop: f64,
     requested_horizon_percent: f64, effective_horizon_percent: f64,
+    locally_adjusted: f64,
 }
 pub struct Engine { transforms: gyroflow_core::stabilization::ComputeParams, use_gpu: bool, manager: StabilizationManager, width: usize, height: usize, ow: usize, oh: usize, report: StabilizationReport }
 
@@ -67,6 +68,50 @@ fn configure_horizon(manager: &StabilizationManager, config: &Config, amount: f6
                 (g.timestamp_ms*1000.0).round() as i64, gravity_lock_amount(&image_gravity(g.gravity)) * amount / 100.0);
         }
     }
+}
+
+/// Gyroflow's zoom-limit iterations are intentionally approximate. If an extreme
+/// interval still exceeds the requested crop, relax the already-computed correction
+/// only around that interval. The envelope avoids a visible strength step while
+/// leaving distant calm footage untouched.
+fn enforce_local_crop_limit(manager: &StabilizationManager, limit: f64, fps: f64,
+                            transition_seconds: f64) -> bool {
+    let base = manager.gyro.read().smoothed_quaternions.clone();
+    let frame_count = manager.params.read().fovs.len();
+    if frame_count == 0 { return false; }
+    let mut scales = vec![1.0f64; frame_count];
+    let step = 1.0 / (fps * transition_seconds.max(0.5)).max(1.0);
+    manager.set_max_zoom(0.0, 0);
+
+    for _ in 0..16 {
+        let fovs = manager.params.read().fovs.clone();
+        if fovs.iter().all(|f| *f + 1e-6 >= limit) { return true; }
+        for (i, fov) in fovs.iter().enumerate() {
+            if *fov + 1e-6 < limit {
+                scales[i] *= (*fov / limit * 0.9).clamp(0.0, 0.95);
+            }
+        }
+        // Build a gradual envelope on both sides of each reduced interval.
+        for i in 1..frame_count {
+            scales[i] = scales[i].min(scales[i-1] + step);
+        }
+        for i in (0..frame_count.saturating_sub(1)).rev() {
+            scales[i] = scales[i].min(scales[i+1] + step);
+        }
+        {
+            let identity = nalgebra::UnitQuaternion::<f64>::identity();
+            let mut gyro = manager.gyro.write();
+            for (timestamp, correction) in &mut gyro.smoothed_quaternions {
+                let frame = gyroflow_core::frame_at_timestamp(*timestamp as f64 / 1000.0, fps)
+                    .clamp(0, frame_count.saturating_sub(1) as i32) as usize;
+                if let Some(original) = base.get(timestamp) {
+                    *correction = identity.slerp(original, scales[frame]);
+                }
+            }
+        }
+        manager.recompute_adaptive_zoom();
+    }
+    manager.params.read().fovs.iter().all(|f| *f + 1e-6 >= limit)
 }
 
 fn create(config: Config) -> Result<Engine, String> {
@@ -143,7 +188,7 @@ fn create(config: Config) -> Result<Engine, String> {
     manager.set_render_params((config.width,config.height),(config.output_width,config.output_height));
     manager.set_smoothing_method(2); // Plain 3D, follows intentional camera turns.
     manager.set_adaptive_zoom(config.options.zoom_transition_seconds);
-    manager.set_max_zoom(0.0, 0); // Apply our explicit crop bound below, independent of output resolution.
+    manager.set_max_zoom(0.0, 0);
     manager.set_frame_readout_time(0.0); // Unknown readout: no rolling-shutter correction.
     manager.set_background_color(nalgebra::Vector4::new(0.0,0.0,0.0,255.0));
     // The movie display transform is applied by Swift after native-pixel processing.
@@ -152,40 +197,53 @@ fn create(config: Config) -> Result<Engine, String> {
     let requested_tau = config.options.smoothing_seconds.unwrap_or_else(|| 0.16 * 25.0f64.powf(config.options.strength));
     let requested_horizon = if config.options.horizon_lock { 100.0 } else { 0.0 };
     let limit = 1.0 / config.options.max_crop;
-    let mut acceptable = false;
     let mut report = StabilizationReport { requested_smoothing_seconds: requested_tau,
         effective_smoothing_seconds: requested_tau, minimum_crop: 1.0, maximum_crop: 1.0,
-        requested_horizon_percent: requested_horizon, effective_horizon_percent: requested_horizon };
-    // Fit the entire clip before opening codecs. Never encode trial videos.
-    // Manual settings retain the existing policy; automatic settings can also relax
-    // horizon lock, and explicitly report an unstabilized result at the final limit.
-    let candidates: &[(f64, f64)] = if config.options.automatic_adjustment {
-        &[(1.,1.), (0.5,1.), (0.25,1.), (0.25,0.5), (0.1,0.5), (0.1,0.25), (0.02,0.25), (0.02,0.), (0.005,0.), (0.,0.)]
-    } else { &[(1.,1.), (0.5,1.), (0.25,1.), (0.1,1.), (0.02,1.)] };
-    let mut previous_candidate = None;
-    for &(factor, horizon_factor) in candidates {
-        let candidate = (requested_tau * factor, requested_horizon * horizon_factor);
-        if previous_candidate == Some(candidate) { continue; }
-        previous_candidate = Some(candidate);
-        configure_horizon(&manager, &config, candidate.1);
-        manager.set_smoothing_param("time_constant", candidate.0);
-        manager.recompute_blocking();
-        let mut params = manager.params.write();
+        requested_horizon_percent: requested_horizon, effective_horizon_percent: requested_horizon,
+        locally_adjusted: 0.0 };
+
+    configure_horizon(&manager, &config, requested_horizon);
+    manager.set_smoothing_param("time_constant", requested_tau);
+    manager.recompute_blocking();
+    let needs_fitting;
+    {
+        let params = manager.params.read();
         if params.fovs.is_empty() || params.fovs.iter().any(|f| !f.is_finite() || *f <= 0.0) {
             return Err("Invalid crop calculation".into());
         }
-        if config.options.allow_black_borders || params.fovs.iter().all(|f| *f >= limit) {
-            for fov in &mut params.fovs {
-                *fov = if config.options.dynamic_crop { fov.clamp(limit, 1.0) } else { limit };
-            }
-            report.effective_smoothing_seconds = candidate.0;
-            report.effective_horizon_percent = candidate.1;
-            report.minimum_crop = params.fovs.iter().map(|f| 1.0/f).fold(f64::INFINITY, f64::min);
-            report.maximum_crop = params.fovs.iter().map(|f| 1.0/f).fold(1.0, f64::max);
-            acceptable = true; break;
+        needs_fitting = !config.options.allow_black_borders
+            && params.fovs.iter().any(|f| *f + 1e-9 < limit);
+        report.locally_adjusted = needs_fitting as u8 as f64;
+    }
+
+    // Gyroflow's zoom limit feeds a per-frame coverage ratio back into Plain 3D.
+    // Only motion near the crop limit loses correction; calm parts retain the
+    // requested smoothing. Convert our crop relative to the source frame into
+    // Gyroflow's zoom percentage, which is relative to the output dimensions.
+    if needs_fitting {
+        let output_scale = config.width as f64 / config.output_width as f64;
+        let zoom_percent = (100.0 * config.options.max_crop / output_scale).max(50.000_001);
+        manager.set_max_zoom(zoom_percent, 10);
+        manager.recompute_blocking();
+        if manager.params.read().fovs.iter().any(|f| *f + 1e-6 < limit)
+            && !enforce_local_crop_limit(&manager, limit, config.fps, config.options.zoom_transition_seconds) {
+            return Err("裁切上限不足：请增大最大裁切，或开启允许黑边。原片已保留。".into());
         }
     }
-    if !acceptable { return Err("裁切上限不足：请增大最大裁切，或开启允许黑边。原片已保留。".into()); }
+
+    let mut params = manager.params.write();
+    if params.fovs.is_empty() || params.fovs.iter().any(|f| !f.is_finite() || *f <= 0.0) {
+        return Err("Invalid crop calculation".into());
+    }
+    if !config.options.allow_black_borders && params.fovs.iter().any(|f| *f + 1e-6 < limit) {
+        return Err("裁切上限不足：请增大最大裁切，或开启允许黑边。原片已保留。".into());
+    }
+    for fov in &mut params.fovs {
+        *fov = if config.options.dynamic_crop { fov.clamp(limit, 1.0) } else { limit };
+    }
+    report.minimum_crop = params.fovs.iter().map(|f| 1.0/f).fold(f64::INFINITY, f64::min);
+    report.maximum_crop = params.fovs.iter().map(|f| 1.0/f).fold(1.0, f64::max);
+    drop(params);
     manager.recompute_undistortion();
     manager.set_device(if config.use_gpu { 0 } else { -1 });
     let transforms = gyroflow_core::stabilization::ComputeParams::from_manager(&manager);
@@ -381,18 +439,22 @@ mod tests {
         assert!(engine.manager.gyro.read().smoothed_quaternions.values().all(|q| q.angle() < 1e-7));
     }
     #[test]
-    fn automatic_policy_recovers_crop_horizon_conflicts_in_all_orientations() {
+    fn local_policy_recovers_crop_horizon_conflicts_in_all_orientations() {
         for rotation in [0,90,180,270] {
             let mut manual = gravity_fixture(rotation, 45.);
             manual.options.allow_black_borders = false;
             manual.options.max_crop = 1.1;
-            assert!(create(manual).is_err());
+            let manual_engine = create(manual).unwrap();
+            assert!(manual_engine.report.locally_adjusted > 0.5);
+            assert_eq!(manual_engine.report.effective_horizon_percent, 100.);
+            assert!(manual_engine.report.maximum_crop <= 1.1 + 1e-9);
             let mut automatic = gravity_fixture(rotation, 45.);
             automatic.options.allow_black_borders = false;
             automatic.options.max_crop = 1.1;
             automatic.options.automatic_adjustment = true;
             let engine = create(automatic).unwrap();
-            assert!(engine.report.effective_horizon_percent < 100.);
+            assert!(engine.report.locally_adjusted > 0.5);
+            assert_eq!(engine.report.effective_horizon_percent, 100.);
             assert_eq!(engine.report.requested_horizon_percent, 100.);
             assert!(engine.report.maximum_crop <= 1.1 + 1e-9);
         }
@@ -450,10 +512,53 @@ mod tests {
             let engine = create(config).unwrap();
             let r = engine.report;
             assert_eq!(r.requested_smoothing_seconds, 4.);
-            if allow { assert_eq!(r.effective_smoothing_seconds, 4.); }
-            else { assert!(r.effective_smoothing_seconds < 4.); }
+            assert_eq!(r.effective_smoothing_seconds, 4.);
+            assert_eq!(r.locally_adjusted > 0.5, !allow);
             assert!(r.maximum_crop <= 1.2 + 1e-9 && r.minimum_crop >= 1.);
         }
+    }
+    #[test]
+    fn short_motion_burst_does_not_reduce_distant_calm_footage() {
+        let make = |allow_black_borders: bool| {
+            let mut config = fixture();
+            config.duration_ms = 20_000.;
+            config.frames = (0..600).map(|i| Frame { timestamp_us: i*33_333,
+                k: [500.,0.,320.,0.,510.,180.,0.,0.,1.] }).collect();
+            config.gyro = (-5..=2005).map(|i| {
+                let t = i as f64 * 10.;
+                let z = if (9_500.0..9_800.0).contains(&t) { 4.0 }
+                    else if (9_800.0..10_100.0).contains(&t) { -4.0 } else { 0.0 };
+                Gyro { timestamp_ms: t, gyro: [0.,0.,z] }
+            }).collect();
+            config.options.smoothing_seconds = Some(3.);
+            config.options.max_crop = 1.1;
+            config.options.allow_black_borders = allow_black_borders;
+            config
+        };
+        let unrestricted = create(make(true)).unwrap();
+        let limited = create(make(false)).unwrap();
+        assert!(limited.report.locally_adjusted > 0.5);
+        assert_eq!(limited.report.effective_smoothing_seconds, 3.);
+        assert!(limited.report.maximum_crop <= 1.1 + 1e-9);
+
+        let unrestricted_gyro = unrestricted.manager.gyro.read();
+        let limited_gyro = limited.manager.gyro.read();
+        let mut distant_max = 0.0f64;
+        let mut burst_unrestricted = 0.0;
+        let mut burst_limited = 0.0;
+        for (timestamp, original) in &unrestricted_gyro.smoothed_quaternions {
+            let adjusted = limited_gyro.smoothed_quaternions[timestamp];
+            if *timestamp < 5_000_000 || *timestamp > 15_000_000 {
+                distant_max = distant_max.max(original.angle_to(&adjusted));
+            }
+            if (9_500_000..=10_100_000).contains(timestamp) {
+                burst_unrestricted += original.angle();
+                burst_limited += adjusted.angle();
+            }
+        }
+        assert!(distant_max < 0.02, "distant correction changed by {distant_max} rad");
+        assert!(burst_limited < burst_unrestricted * 0.8,
+            "burst correction was not locally reduced: {burst_limited} vs {burst_unrestricted}");
     }
     #[test]
     fn per_frame_intrinsics_follow_zoom() {

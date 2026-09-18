@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import AVKit
 
 struct CameraView: View {
     @StateObject private var camera = CaptureService()
@@ -10,7 +11,7 @@ struct CameraView: View {
     @State private var showLibrary = false
     @State private var showSettings = false
     @State private var pinchStartZoom: Double?
-    @AppStorage("cameraGridEnabled") private var gridEnabled = false
+    @AppStorage("cameraGridEnabled") private var gridEnabled = true
 
     private var recording: Bool { camera.phase == .recording }
 
@@ -42,12 +43,18 @@ struct CameraView: View {
             if camera.phase == .unavailable {
                 VStack(spacing: 16) {
                     Image(systemName: "camera").font(.largeTitle)
-                    Text(camera.permissionDenied ? "允许相机和麦克风访问后开始拍摄" : "请在 iPhone 上打开相机")
+                    Text(camera.permissionDenied ? "允许相机和麦克风访问后开始拍摄" : "相机暂不可用")
                         .font(.subheadline).multilineTextAlignment(.center)
                     if camera.permissionDenied {
                         Button("打开设置") {
                             if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
                         }.buttonStyle(.borderedProminent)
+                    } else {
+                        Button("重试") {
+                            camera.setActive(scenePhase == .active && !showLibrary)
+                            Task { await camera.prepare() }
+                        }.buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("retryCamera")
                     }
                 }.padding(30)
             }
@@ -57,7 +64,7 @@ struct CameraView: View {
             VStack(spacing: 0) {
                 HStack {
                     Text(recording ? timer : "RoamShot")
-                        .font(.system(.headline, design: .monospaced)).foregroundStyle(recording ? .red : .white)
+                        .font(.system(.headline, design: .monospaced)).foregroundStyle(recording ? AnyShapeStyle(Color.red) : AnyShapeStyle(AppTheme.brandGradient.opacity(0.85)))
                     Spacer()
                     Menu {
                         CaptureFormatControls(camera: camera)
@@ -125,9 +132,27 @@ struct CameraView: View {
                         Color.clear.frame(width: 54, height: 54)
                     }.padding(.horizontal, 30)
                 }.padding(.bottom, 20)
-            }
+            }.opacity(camera.hardwareControlsFullscreen ? 0 : 1)
+                .allowsHitTesting(!camera.hardwareControlsFullscreen)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .top) {
+            if let notice = camera.captureNotice, scenePhase == .active, !showLibrary, !showSettings {
+                Text(notice.text).font(.subheadline)
+                    .padding(.horizontal, 16).padding(.vertical, 10)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .padding(.top, 64).allowsHitTesting(false)
+                    .accessibilityIdentifier("captureSavedNotice")
+            }
+        }
+        .task(id: "\(camera.captureNotice?.id.uuidString ?? "")-\(scenePhase)-\(showLibrary)-\(showSettings)") {
+            guard scenePhase == .active, !showLibrary, !showSettings, let notice = camera.captureNotice else { return }
+            do { try await Task.sleep(for: .seconds(4)) } catch { return }
+            if camera.captureNotice?.id == notice.id { camera.captureNotice = nil }
+        }
+        .modifier(HardwareCaptureModifier(enabled: scenePhase == .active && !showLibrary && !showSettings && camera.message == nil && !camera.startingRecording && (camera.phase == .ready || recording)) {
+            if recording { camera.stopRecording() } else { camera.startRecording() }
+        })
         .background(.black).foregroundStyle(.white)
         .sheet(isPresented: $showLibrary) { RecordingLibraryView() }
         .sheet(isPresented: $showSettings) { RecordingSettingsView(camera: camera, gridEnabled: $gridEnabled) }
@@ -148,7 +173,8 @@ struct CameraView: View {
                 }
             }
             #endif
-            camera.setActive(scenePhase == .active)
+            jobs.setForeground(scenePhase == .active)
+            camera.setActive(!showLibrary && scenePhase == .active)
             await camera.prepare()
             #if DEBUG
             if args.contains("--focus-controls-test") { await camera.validateFocusControls() }
@@ -306,5 +332,45 @@ private struct RecordingSettingsView: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
         }.tint(AppTheme.accent)
             .sheet(isPresented: $showUpgrade) { ProUpgradeView() }
+    }
+}
+
+/// Disable outside the capture UI so volume keys retain their normal function.
+private struct HardwareCaptureModifier: ViewModifier {
+    let enabled: Bool
+    let action: () -> Void
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 17.2, *) {
+            content.background(HardwareCaptureView(enabled: enabled, action: action).allowsHitTesting(false))
+        } else { content }
+    }
+}
+
+@available(iOS 17.2, *)
+private struct HardwareCaptureView: UIViewRepresentable {
+    let enabled: Bool
+    let action: () -> Void
+    final class CaptureView: UIView {
+        var action: (() -> Void)?
+        private(set) var captureInteraction: AVCaptureEventInteraction!
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            captureInteraction = AVCaptureEventInteraction { [weak self] event in
+                guard let self, self.captureInteraction.isEnabled, event.phase == .ended else { return }
+                self.action?()
+            }
+            captureInteraction.isEnabled = false
+            addInteraction(captureInteraction)
+        }
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    }
+    func makeUIView(context: Context) -> CaptureView { CaptureView(frame: .zero) }
+    func updateUIView(_ view: CaptureView, context: Context) {
+        view.action = action
+        view.captureInteraction.isEnabled = enabled
+    }
+    static func dismantleUIView(_ view: CaptureView, coordinator: ()) {
+        view.captureInteraction.isEnabled = false
+        view.action = nil
     }
 }

@@ -11,6 +11,8 @@ final class StabilizationJobs: ObservableObject {
     private struct Job { let directory: URL; let options: StabilizationOptions }
     private var pending: [Job] = []
     private var active: URL?
+    private var activeJob: Job?
+    private var resumeAfterBackground = false
     private var control: ProcessingControl?
     private var worker: Task<Void, Never>?
     private var deleting: Set<URL> = []
@@ -42,12 +44,14 @@ final class StabilizationJobs: ObservableObject {
     func setRecording(_ value: Bool) { recording = value; control?.pause(value); if !value { next() }; updateIdleTimer() }
     func setForeground(_ value: Bool) {
         foreground = value
-        if !value { control?.cancel() } else { next() }
+        if !value {
+            if active != nil { resumeAfterBackground = true; control?.cancel() }
+        } else { next() }
         updateIdleTimer()
     }
     func cancel(_ directory: URL) {
         pending.removeAll { $0.directory == directory }
-        if active == directory { control?.cancel() }
+        if active == directory { activeJob = nil; resumeAfterBackground = false; control?.cancel() }
         else { states[directory.lastPathComponent] = .failed("已取消，原片已保留。") }
         updateIdleTimer()
     }
@@ -71,6 +75,7 @@ final class StabilizationJobs: ObservableObject {
         pending.removeAll { targets.contains($0.directory) }
         if let active, targets.contains(active) {
             let running = worker
+            activeJob = nil; resumeAfterBackground = false
             control?.cancel()
             await running?.value
         }
@@ -95,7 +100,7 @@ final class StabilizationJobs: ObservableObject {
         let job = pending.removeFirst()
         let directory = job.directory
         let token = ProcessingControl()
-        active = directory; control = token
+        active = directory; activeJob = job; resumeAfterBackground = false; control = token
         updateIdleTimer()
         states[directory.lastPathComponent] = .processing(0)
         worker = Task.detached(priority: .utility) { [weak self] in
@@ -120,15 +125,20 @@ final class StabilizationJobs: ObservableObject {
                 states[directory.lastPathComponent] = .ready
                 revisions[directory.lastPathComponent, default: 0] += 1
             case let .failure(error):
+                if error is CancellationError, resumeAfterBackground, let job = activeJob {
+                    pending.insert(job, at: 0)
+                    states[directory.lastPathComponent] = .queued
+                    break
+                }
                 if error is StabilizationProcessor.ParameterConflict { parameterConflicts.insert(directory.lastPathComponent) }
                 let diagnostic = ["stage": "failed", "error": error.localizedDescription,
                                   "updated_at": ISO8601DateFormatter().string(from: Date())]
                 if let data = try? JSONSerialization.data(withJSONObject: diagnostic, options: [.sortedKeys]) {
                     try? data.write(to: directory.appendingPathComponent("processing-status.json"), options: .atomic)
                 }
-                states[directory.lastPathComponent] = .failed(error is CancellationError ? "处理已停止，返回前台后可重试。" : error.localizedDescription)
+                states[directory.lastPathComponent] = .failed(error is CancellationError ? "已取消，原片已保留。" : error.localizedDescription)
             }
         }
-        active = nil; control = nil; worker = nil; next(); updateIdleTimer()
+        active = nil; activeJob = nil; resumeAfterBackground = false; control = nil; worker = nil; next(); updateIdleTimer()
     }
 }

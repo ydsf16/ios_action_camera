@@ -46,6 +46,11 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     private var formatChoices: [CaptureFormat: AVCaptureDevice.Format] = [:]
     @Published private(set) var duration = 0.0
     @Published private(set) var latestDirectory: URL?
+    struct CaptureNotice: Identifiable {
+        let id = UUID()
+        let text: String
+    }
+    @Published var captureNotice: CaptureNotice?
     @Published var message: String?
     @Published private(set) var permissionDenied = false
 
@@ -110,8 +115,10 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         let center = NotificationCenter.default
         observers.append(center.addObserver(forName: .AVCaptureSessionWasInterrupted, object: session, queue: nil) { [weak self] _ in
             self?.queue.async { [weak self] in
-                self?.stopOnQueue(reason: "capture_interruption")
-                self?.publish { $0.message = "相机被中断，当前片段已结束。"; $0.phase = .unavailable }
+                guard let self else { return }
+                self.stopOnQueue(reason: "capture_interruption")
+                // Keep the saving state until the writer confirms success/failure.
+                if !self.isFinishing { self.publish { $0.phase = .unavailable } }
             }
         })
         observers.append(center.addObserver(forName: .AVCaptureSessionInterruptionEnded, object: session, queue: nil) { [weak self] _ in
@@ -149,6 +156,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
             }
             return
         }
+        publish { $0.permissionDenied = false }
         queue.async { [self] in
             do {
                 if !configured { try configure() }
@@ -296,6 +304,30 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
             connection.isVideoMirrored = false
         }
         if connection.isCameraIntrinsicMatrixDeliverySupported { connection.isCameraIntrinsicMatrixDeliveryEnabled = true }
+        configureHardwareZoomControl()
+    }
+
+    /// Called on the capture queue inside the existing configuration transaction.
+    private func configureHardwareZoomControl() {
+        guard #available(iOS 18.0, *), session.supportsControls else { return }
+        session.setControlsDelegate(self, queue: queue)
+        if let old = cameraZoomControl as? AVCaptureSlider { session.removeControl(old) }
+        cameraZoomControl = nil
+        guard let device = cameraInput?.device else { return }
+        let range = Self.zoomConfiguration(device)
+        guard range.maximum > range.minimum else { return }
+        let slider = AVCaptureSlider("变焦", symbolName: "magnifyingglass", in: Float(range.minimum)...Float(range.maximum))
+        slider.localizedValueFormat = "%@×"
+        slider.prominentValues = range.stops.map { Float($0) }
+        slider.setActionQueue(queue) { [weak self, weak device] value in
+            guard let self, let device, self.cameraInput?.device === device else { return }
+            self.setZoom(Double(value))
+        }
+        slider.value = Float(range.displayZoom(for: Double(device.videoZoomFactor)))
+        if session.canAddControl(slider) {
+            session.addControl(slider)
+            cameraZoomControl = slider
+        }
     }
 
     private func supportedFormats(_ device: AVCaptureDevice) -> [CaptureFormat: AVCaptureDevice.Format] {
@@ -333,7 +365,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         if format.isVideoHDRSupported { device.isVideoHDREnabled = false }
         let zoomRange = Self.zoomConfiguration(device)
         device.cancelVideoZoomRamp()
-        device.videoZoomFactor = CGFloat(zoomRange.deviceZoom(for: 1))
+        device.videoZoomFactor = CGFloat(zoomRange.deviceZoom(for: zoomRange.initialZoom))
         if device.isVirtualDevice, device.primaryConstituentDeviceSwitchingBehavior != .unsupported {
             device.setPrimaryConstituentDeviceSwitchingBehavior(.auto, restrictedSwitchingBehaviorConditions: [])
         }
@@ -408,6 +440,9 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
 
     /// Coalesce gesture updates on the capture queue; never stop/reconfigure the
     /// session or reset its clock while changing zoom during a recording.
+    @Published private(set) var hardwareControlsFullscreen = false
+    private var cameraZoomControl: AnyObject?
+
     func setZoom(_ value: Double, smooth: Bool = false) {
         #if DEBUG && targetEnvironment(simulator)
         if storeScreenshotImage != nil {
@@ -531,6 +566,10 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         lastZoomPublish = now
         let range = Self.zoomConfiguration(device)
         let value = range.displayZoom(for: Double(device.videoZoomFactor))
+        if #available(iOS 18.0, *), let slider = cameraZoomControl as? AVCaptureSlider {
+            let current = Float(value)
+            if abs(slider.value - current) > 0.001 { slider.value = current }
+        }
         let primary = device.activePrimaryConstituent ?? device
         let label: String
         switch primary.deviceType {
@@ -690,7 +729,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
                     for row in histories[kind]!.rows(since: now - 0.5) { try recording.appendMotion(kind, row: row) }
                 }
                 lastDiskCheck = now; lastUIPublish = 0
-                publish { $0.duration = 0; $0.phase = .recording }
+                publish { $0.captureNotice = nil; $0.duration = 0; $0.phase = .recording }
                 let timeout = DispatchWorkItem { [weak self] in
                     guard let self, recorder?.manifest.videoFrames == 0 else { return }
                     fail(CaptureFailure.message("相机未输出视频帧，请重试。"))
@@ -715,7 +754,12 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
                 recorder = nil; isFinishing = false
                 if !wantsActive { stopMotion() }
                 switch result {
-                case let .success(directory): publish { $0.latestDirectory = directory }
+                case let .success(directory): publish {
+                    $0.latestDirectory = directory
+                    if reason == "capture_interruption" || reason == "app_background" {
+                        $0.captureNotice = CaptureNotice(text: "录制已停止，视频已保存")
+                    }
+                }
                 case let .failure(error): publish { $0.message = error.localizedDescription }
                 }
                 let nextPhase: CameraPhase = wantsActive && session.isRunning && !session.isInterrupted ? .ready : .unavailable
@@ -983,5 +1027,19 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
             UIApplication.shared.endBackgroundTask(backgroundTask)
             backgroundTask = .invalid
         }
+    }
+}
+
+@available(iOS 18.0, *)
+extension CaptureService: AVCaptureSessionControlsDelegate {
+    func sessionControlsDidBecomeActive(_ session: AVCaptureSession) { }
+    func sessionControlsWillEnterFullscreenAppearance(_ session: AVCaptureSession) {
+        publish { $0.hardwareControlsFullscreen = true }
+    }
+    func sessionControlsWillExitFullscreenAppearance(_ session: AVCaptureSession) {
+        publish { $0.hardwareControlsFullscreen = false }
+    }
+    func sessionControlsDidBecomeInactive(_ session: AVCaptureSession) {
+        publish { $0.hardwareControlsFullscreen = false }
     }
 }

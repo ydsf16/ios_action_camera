@@ -14,14 +14,16 @@ public struct CaptureZoom: Equatable, Sendable {
         let upper = maximumDeviceZoom.isFinite ? max(lower, maximumDeviceZoom) : lower
         self.multiplier = scale
         let displayMinimum = lower * scale
-        // A bounded first release avoids presenting extreme digital enlargement.
-        let displayMaximum = max(displayMinimum, min(upper * scale, 5))
+        // Limit capture enlargement independently from stabilization crop.
+        let displayMaximum = max(displayMinimum, min(upper * scale, 10))
         minimum = displayMinimum
         maximum = displayMaximum
         stops = Array(Set(([displayMinimum, 1, 2] + nativeDeviceZooms.map { $0 * scale })
             .filter { $0.isFinite && $0 >= displayMinimum && $0 <= displayMaximum }
             .map { ($0 * 100).rounded() / 100 })).sorted()
     }
+
+    public var initialZoom: Double { minimum <= 0.5 && maximum >= 0.5 ? 0.5 : clamped(1) }
 
     public func clamped(_ displayZoom: Double) -> Double {
         displayZoom.isFinite ? min(maximum, max(minimum, displayZoom)) : minimum

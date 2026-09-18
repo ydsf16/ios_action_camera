@@ -1,5 +1,10 @@
 # Stabilization controls — 0.8.0 (18)
 
+> Current behavior (2026-09-19): the whole-clip fallback described below has been
+> replaced by Gyroflow zoom-limit feedback plus a bounded local correction envelope.
+> Crop conflicts now reduce stabilization only around the affected frames; requested
+> smoothing remains active in distant calm footage. Receipts record local adjustment.
+
 ## Behavior
 
 - The strength slider spans 0–10 seconds of Plain 3D smoothing, with natural,

@@ -2,8 +2,8 @@ import AVFoundation
 import CryptoKit
 import Foundation
 
-/// Synthetic motion on a copied recording: parameter conflicts must resolve before
-/// encoding; a failed manual attempt must leave the previous result usable.
+/// Synthetic motion on a copied recording: a short crop conflict must be resolved
+/// locally before encoding while preflight leaves the previous result usable.
 enum AdaptiveStabilizationValidation {
     static func run(fixture: URL) async throws {
         func check(_ condition: Bool) throws { if !condition { throw InputError("Adaptive export validation failed") } }
@@ -37,22 +37,13 @@ enum AdaptiveStabilizationValidation {
         var manual = StabilizationOptions()
         manual.automaticAdjustment = false; manual.smoothingSeconds = 0
         manual.horizonLock = true; manual.maxCrop = 1.05; manual.exportResolution = .fullHD
-        do {
-            _ = try await StabilizationProcessor.preflight(directory: root, options: manual, control: ProcessingControl())
-            fatalError("Expected parameter conflict")
-        } catch is StabilizationProcessor.ParameterConflict { }
+        let planned = try await StabilizationProcessor.preflight(directory: root, options: manual, control: ProcessingControl())
+        try check(planned.localAdjustmentApplied)
+        try check(!planned.horizonReduced)
         try check(!fm.fileExists(atPath: root.appendingPathComponent("stabilization-options.json").path))
-        do {
-            _ = try await StabilizationProcessor.process(directory: root, options: manual, control: ProcessingControl()) { _ in }
-            fatalError("Expected parameter conflict")
-        } catch is StabilizationProcessor.ParameterConflict { }
         try check(try Data(contentsOf: output) == previous)
         try check(try Data(contentsOf: receiptURL) == previous)
-        var automatic = manual; automatic.automaticAdjustment = true
-        let planned = try await StabilizationProcessor.preflight(directory: root, options: automatic, control: ProcessingControl())
-        try check(planned.horizonReduced)
-        try check(try Data(contentsOf: output) == previous)
-        _ = try await StabilizationProcessor.process(directory: root, options: automatic, control: ProcessingControl()) { _ in }
+        _ = try await StabilizationProcessor.process(directory: root, options: manual, control: ProcessingControl()) { _ in }
         let receipt = StabilizationReport.load(directory: root)!
         try check(receipt.stabilization == planned)
         let asset = AVURLAsset(url: output)
@@ -62,7 +53,7 @@ enum AdaptiveStabilizationValidation {
         let reader = try AVAssetReader(asset: asset)
         let samples = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange])
         reader.add(samples); try check(reader.startReading())
-        let input = try StabilizationInput.load(directory: root, options: automatic)
+        let input = try StabilizationInput.load(directory: root, options: manual)
         var count = 0
         while let frame = samples.copyNextSampleBuffer() {
             let us = CMSampleBufferGetPresentationTimeStamp(frame).seconds * 1e6
@@ -76,7 +67,7 @@ enum AdaptiveStabilizationValidation {
         for name in files {
             try check(SHA256.hash(data: try Data(contentsOf: fixture.appendingPathComponent(name), options: .mappedIfSafe)) == originals[name])
         }
-        print("PASS: manual conflict checked before encoding; previous movie/receipt preserved; automatic recovery matches plan; \(count) decoded frames, PTS, audio and source hashes verified")
+        print("PASS: local crop recovery matched preflight; previous movie/receipt survived preflight; \(count) decoded frames, PTS, audio and source hashes verified")
         print("Recovery: \(planned.summary); \(planned.details)")
     }
 }
