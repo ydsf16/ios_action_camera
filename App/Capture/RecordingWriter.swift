@@ -54,6 +54,7 @@ final class RecordingWriter {
             stabilizationActive: connection.activeVideoStabilizationMode.rawValue,
             intrinsicsDeliveryEnabled: connection.isCameraIntrinsicMatrixDeliveryEnabled)
         manifest.displayRotationDegrees = rotationDegrees
+        manifest.cameraPosition = device.position == .front ? "front" : "back"
         manifest.virtualCamera = device.isVirtualDevice
         manifest.constituentCameras = device.isVirtualDevice ? device.constituentDevices.map { $0.deviceType.rawValue } : [device.deviceType.rawValue]
         manifest.zoomDisplayMultiplier = CaptureService.zoomConfiguration(device).multiplier

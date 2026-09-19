@@ -185,6 +185,10 @@ struct CameraPreview: UIViewRepresentable {
             // SwiftUI progress/timer updates must not reconfigure an unchanged camera connection.
             CATransaction.begin()
             CATransaction.setDisableActions(true)
+            if connection.isVideoMirroringSupported {
+                connection.automaticallyAdjustsVideoMirroring = false
+                connection.isVideoMirrored = device.position == .front
+            }
             if connection.videoRotationAngle != angle, connection.isVideoRotationAngleSupported(angle) {
                 connection.videoRotationAngle = angle
             }
@@ -216,4 +220,3 @@ struct CameraPreview: UIViewRepresentable {
         view.disconnect()
     }
 }
-

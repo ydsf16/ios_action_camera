@@ -23,6 +23,8 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     @Published private(set) var lenses: [CameraLens] = []
     @Published private(set) var selectedLens = ""
     @Published private(set) var usesVirtualCamera = false
+    @Published private(set) var isFrontCamera = false
+    @Published private(set) var hasFrontCamera = false
     @Published private(set) var previewDevice: AVCaptureDevice?
     @Published private(set) var zoom = 1.0
     @Published private(set) var zoomRange = CaptureZoom(multiplier: 1, minimumDeviceZoom: 1, maximumDeviceZoom: 1, nativeDeviceZooms: [])
@@ -35,6 +37,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     @Published private(set) var focusFeedback: CameraFocusFeedback?
     private var focusSelection: CameraFocusFeedback? // capture queue only
     private var focusPrimaryID: String?
+    private var focusLockWork: DispatchWorkItem?
     @Published private(set) var selectedFormat = CaptureFormat.load()
     @Published private(set) var availableFormats: [CaptureFormat] = []
     var formatLabel: String { selectedFormat.label }
@@ -67,6 +70,8 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     private let videoOutput = AVCaptureVideoDataOutput()
     private let audioOutput = AVCaptureAudioDataOutput()
     private var cameraInput: AVCaptureDeviceInput?
+    private var backLenses: [CameraLens] = [] // capture queue only
+    private var frontLens: CameraLens? // capture queue only
     private var recorder: RecordingWriter?
     private var recordingLimitTimeout: DispatchWorkItem?
     @Published private(set) var startingRecording = false
@@ -130,6 +135,16 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
                 self?.fail(error ?? CaptureFailure.message("相机发生错误，请重新进入应用。"))
             }
         })
+        // Returning users have already granted access. Begin building the capture
+        // graph as soon as the view model exists instead of waiting for SwiftUI's task.
+        if AVCaptureDevice.authorizationStatus(for: .video) == .authorized,
+           AVCaptureDevice.authorizationStatus(for: .audio) == .authorized {
+            queue.async { [weak self] in
+                guard let self, !self.configured else { return }
+                do { try self.configure(); if self.wantsActive { self.resumeIfPossible() } }
+                catch { self.fail(error) }
+            }
+        }
     }
 
     deinit { observers.forEach(NotificationCenter.default.removeObserver) }
@@ -210,6 +225,10 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
             return CameraLens(id: type.rawValue, label: label, type: type)
         }
         guard let lens = available.first else { throw CaptureFailure.message("找不到后置相机。") }
+        backLenses = available
+        frontLens = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front).map {
+            CameraLens(id: $0.deviceType.rawValue, label: "前置", type: $0.deviceType)
+        }
         session.beginConfiguration()
         defer {
             if !configured {
@@ -231,23 +250,27 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         let microphoneInput = try AVCaptureDeviceInput(device: microphone)
         guard session.canAddInput(microphoneInput) else { throw CaptureFailure.message("无法启动麦克风。") }
         session.addInput(microphoneInput)
-        var installedVirtual = false
-        for type in [AVCaptureDevice.DeviceType.builtInTripleCamera, .builtInDualWideCamera, .builtInDualCamera] {
-            guard AVCaptureDevice.default(type, for: .video, position: .back) != nil else { continue }
-            do {
-                try installCamera(CameraLens(id: type.rawValue, label: "自动", type: type))
-                installedVirtual = true
-                break
-            } catch { /* Try a compatible virtual device, then the physical fallback. */ }
-        }
-        if !installedVirtual { try installCamera(lens) }
+        try installPreferredBackCamera(fallback: lens)
         configured = true
-        publish { $0.lenses = available; $0.permissionDenied = false }
+        let supportsFront = frontLens != nil
+        publish { $0.lenses = available; $0.hasFrontCamera = supportsFront; $0.permissionDenied = false }
         #endif
     }
 
-    private func installCamera(_ lens: CameraLens) throws {
-        guard let device = AVCaptureDevice.default(lens.type, for: .video, position: .back) else {
+    private func installPreferredBackCamera(fallback: CameraLens? = nil) throws {
+        for type in [AVCaptureDevice.DeviceType.builtInTripleCamera, .builtInDualWideCamera, .builtInDualCamera] {
+            guard AVCaptureDevice.default(type, for: .video, position: .back) != nil else { continue }
+            do {
+                try installCamera(CameraLens(id: type.rawValue, label: "自动", type: type), position: .back)
+                return
+            } catch { /* Try the next virtual camera, then a physical fallback. */ }
+        }
+        guard let lens = fallback ?? backLenses.first else { throw CaptureFailure.message("找不到后置相机。") }
+        try installCamera(lens, position: .back)
+    }
+
+    private func installCamera(_ lens: CameraLens, position: AVCaptureDevice.Position = .back) throws {
+        guard let device = AVCaptureDevice.default(lens.type, for: .video, position: position) else {
             throw CaptureFailure.message("此镜头不可用。")
         }
         let replacement = try AVCaptureDeviceInput(device: device)
@@ -274,6 +297,7 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
             publish {
                 $0.focusLabel = focus; $0.selectedLens = lens.id; $0.selectedFormat = selected
                 $0.usesVirtualCamera = device.isVirtualDevice
+                $0.isFrontCamera = device.position == .front
                 $0.previewDevice = device
                 $0.availableFormats = CaptureFormat.candidates.filter { choices[$0] != nil }
                 if changed { $0.message = "此镜头已使用支持的格式：\(selected.label) fps。" }
@@ -496,7 +520,13 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
                 focusPrimaryID = primary.uniqueID
                 let selection = CameraFocusFeedback(id: UUID(), point: point, phase: lock ? .locking : .tracking)
                 focusSelection = selection
+                focusLockWork?.cancel()
+                focusLockWork = nil
                 publish { $0.focusFeedback = selection }
+                if lock {
+                    scheduleFocusLock(device: device, selectionID: selection.id,
+                                      deadline: CMClockGetTime(CMClockGetHostTimeClock()).seconds + 2)
+                }
                 refreshFocusStatus(device)
                 writeConfigurationReport()
             } catch { publish { $0.message = error.localizedDescription } }
@@ -508,6 +538,8 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
         if device.isFocusPointOfInterestSupported { device.focusPointOfInterest = CGPoint(x: 0.5, y: 0.5) }
         if device.isFocusModeSupported(.continuousAutoFocus) { device.focusMode = .continuousAutoFocus }
         focusSelection = nil
+        focusLockWork?.cancel()
+        focusLockWork = nil
         focusPrimaryID = (device.activePrimaryConstituent ?? device).uniqueID
         publish { $0.focusFeedback = nil }
     }
@@ -539,6 +571,8 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
            device.focusMode == .locked, !device.isAdjustingFocus, !primary.isAdjustingFocus {
             selection.phase = .locked
             focusSelection = selection
+            focusLockWork?.cancel()
+            focusLockWork = nil
             publish { $0.focusFeedback = selection }
             writeConfigurationReport()
         }
@@ -558,6 +592,33 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
             label = "连续自动对焦"
         }
         publish { if $0.focusLabel != label { $0.focusLabel = label } }
+    }
+
+    private func scheduleFocusLock(device: AVCaptureDevice, selectionID: UUID, deadline: Double) {
+        let work = DispatchWorkItem { [weak self, weak device] in
+            guard let self, let device, self.cameraInput?.device === device,
+                  var selection = self.focusSelection, selection.id == selectionID,
+                  selection.phase == .locking else { return }
+            let primary = device.activePrimaryConstituent ?? device
+            let now = CMClockGetTime(CMClockGetHostTimeClock()).seconds
+            if (device.isAdjustingFocus || primary.isAdjustingFocus), now < deadline {
+                self.scheduleFocusLock(device: device, selectionID: selectionID, deadline: deadline)
+                return
+            }
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                guard device.isFocusModeSupported(.locked) else { return }
+                device.focusMode = .locked
+                selection.phase = .locked
+                self.focusSelection = selection
+                self.focusLockWork = nil
+                self.publish { $0.focusFeedback = selection }
+                self.writeConfigurationReport()
+            } catch { self.publish { $0.message = error.localizedDescription } }
+        }
+        focusLockWork = work
+        queue.asyncAfter(deadline: .now() + 0.1, execute: work)
     }
 
     private func publishZoom(_ device: AVCaptureDevice, force: Bool = false) {
@@ -622,12 +683,34 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
 
     func selectLens(_ lens: CameraLens) {
         queue.async { [self] in
-            guard recorder == nil, !isFinishing, configured else { return }
+            guard recorder == nil, !isFinishing, configured, cameraInput?.device.position == .back else { return }
             publish { $0.phase = .preparing }
-            session.stopRunning()
             session.beginConfiguration()
             do {
                 try installCamera(lens)
+                session.commitConfiguration()
+                resumeIfPossible()
+            } catch {
+                session.commitConfiguration()
+                resumeIfPossible()
+                publish { $0.message = error.localizedDescription }
+            }
+        }
+    }
+
+    func switchCamera() {
+        queue.async { [self] in
+            guard recorder == nil, !isFinishing, configured, wantsActive else { return }
+            let useFront = cameraInput?.device.position != .front
+            publish { $0.phase = .preparing }
+            session.beginConfiguration()
+            do {
+                if useFront {
+                    guard let frontLens else { throw CaptureFailure.message("此设备没有可用的前置相机。") }
+                    try installCamera(frontLens, position: .front)
+                } else {
+                    try installPreferredBackCamera()
+                }
                 session.commitConfiguration()
                 resumeIfPossible()
             } catch {
@@ -651,36 +734,39 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
 
     private func writeConfigurationReport() {
         guard let device = cameraInput?.device else { return }
+        func finite(_ value: Double) -> Any { value.isFinite ? value : NSNull() }
         let maximum = device.activeMaxExposureDuration.seconds
         let size = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
         let report: [String: Any] = ["focus_mode": device.focusMode.rawValue,
-            "focus_point": [device.focusPointOfInterest.x, device.focusPointOfInterest.y],
+            "focus_point": [finite(Double(device.focusPointOfInterest.x)), finite(Double(device.focusPointOfInterest.y))],
             "focus_adjusting": device.isAdjustingFocus,
             "user_focus_lock_requested": focusSelection?.persistent ?? false,
-            "camera": device.deviceType.rawValue, "virtual_camera": device.isVirtualDevice,
+            "camera": device.deviceType.rawValue, "camera_position": device.position == .front ? "front" : "back",
+            "virtual_camera": device.isVirtualDevice,
             "constituent_devices": device.constituentDevices.map { $0.deviceType.rawValue },
             "active_camera_observed": (device.activePrimaryConstituent ?? device).deviceType.rawValue,
-            "zoom_observed": device.videoZoomFactor,
-            "display_zoom_multiplier": Self.zoomConfiguration(device).multiplier,
+            "zoom_observed": finite(Double(device.videoZoomFactor)),
+            "display_zoom_multiplier": finite(Self.zoomConfiguration(device).multiplier),
             "intrinsics_delivery_enabled": videoOutput.connection(with: .video)?.isCameraIntrinsicMatrixDeliveryEnabled ?? false,
             "stabilization_active": videoOutput.connection(with: .video)?.activeVideoStabilizationMode.rawValue ?? -1,
             "width": size.width, "height": size.height, "requested_fps": activeCaptureFormat.fps,
             "orientation_source": "AVCaptureDevice.RotationCoordinator",
             "capture_rotation_degrees": recordingRotationDegrees as Any? ?? NSNull(),
             "preview_rotation_degrees": previewRotationDegrees as Any? ?? NSNull(),
-            "min_frame_duration_seconds": device.activeVideoMinFrameDuration.seconds,
-            "max_frame_duration_seconds": device.activeVideoMaxFrameDuration.seconds,
+            "min_frame_duration_seconds": finite(device.activeVideoMinFrameDuration.seconds),
+            "max_frame_duration_seconds": finite(device.activeVideoMaxFrameDuration.seconds),
             "available_formats": CaptureFormat.candidates.filter { formatChoices[$0] != nil }.map {
                 ["resolution": $0.resolution.label, "width": $0.resolution.width, "height": $0.resolution.height, "fps": $0.fps] as [String: Any]
             },
             "continuous_autofocus": device.focusMode == .continuousAutoFocus,
             "exposure_policy": activeExposurePolicy.rawValue, "exposure_mode": device.exposureMode.rawValue,
-            "max_exposure_seconds": maximum.isFinite ? maximum as Any : NSNull(),
-            "observed_exposure_seconds": device.exposureDuration.seconds,
-            "observed_iso": device.iso,
+            "max_exposure_seconds": finite(maximum),
+            "observed_exposure_seconds": finite(device.exposureDuration.seconds),
+            "observed_iso": finite(Double(device.iso)),
             "system_clock_available": session.synchronizationClock != nil,
             "hardware_triggered_sync": false, "updated_at": ISO8601DateFormatter().string(from: Date())]
-        if let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]) {
+        if JSONSerialization.isValidJSONObject(report),
+           let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]) {
             let url = Self.recordingsRoot.deletingLastPathComponent().appendingPathComponent("capture-configuration.json")
             try? data.write(to: url, options: .atomic)
         }
@@ -862,6 +948,60 @@ final class CaptureService: NSObject, ObservableObject, @unchecked Sendable, AVC
     }
 
     #if DEBUG
+    @MainActor func validateCameraSwitching() async {
+        let url = Self.recordingsRoot.deletingLastPathComponent().appendingPathComponent("camera-switch-validation.json")
+        var result: [String: Any] = ["passed": false]
+        do {
+            for _ in 0..<50 {
+                if phase == .ready { break }
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            guard phase == .ready, !isFrontCamera, hasFrontCamera else { throw InputError("后摄尚未就绪。") }
+            let clockBefore = session.synchronizationClock.map(ObjectIdentifier.init)
+            let frontStart = CACurrentMediaTime()
+            switchCamera()
+            for _ in 0..<50 {
+                if phase == .ready, isFrontCamera { break }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            let frontSeconds = CACurrentMediaTime() - frontStart
+            guard phase == .ready, isFrontCamera, session.isRunning else { throw InputError("切换前摄失败。") }
+            let backStart = CACurrentMediaTime()
+            switchCamera()
+            for _ in 0..<50 {
+                if phase == .ready, !isFrontCamera { break }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            let backSeconds = CACurrentMediaTime() - backStart
+            guard phase == .ready, !isFrontCamera, session.isRunning else { throw InputError("切换后摄失败。") }
+            let clockAfter = session.synchronizationClock.map(ObjectIdentifier.init)
+            result = ["passed": true, "front_seconds": frontSeconds, "back_seconds": backSeconds,
+                      "session_running": true, "synchronization_clock_preserved": clockBefore == clockAfter]
+        } catch { result["error"] = error.localizedDescription }
+        if let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys, .prettyPrinted]) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    @MainActor func validateFrontCamera(seconds: Double) async {
+        for _ in 0..<100 {
+            if phase == .ready { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        guard phase == .ready, hasFrontCamera else {
+            message = "前置相机尚未就绪。"; return
+        }
+        switchCamera()
+        for _ in 0..<100 {
+            if phase == .ready, isFrontCamera { break }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        guard phase == .ready, isFrontCamera else {
+            message = "前置相机切换失败。"; return
+        }
+        await validateRecording(seconds: seconds)
+    }
+
     /// Explicit device-test launch only; uses the same controls, entitlement limit,
     /// writer, telemetry and stop path as a manual recording. No Release entry point.
     @MainActor func validateRecording(seconds: Double) async {

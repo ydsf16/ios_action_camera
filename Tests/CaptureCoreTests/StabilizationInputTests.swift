@@ -42,6 +42,16 @@ final class StabilizationInputTests: XCTestCase {
         try manifest.write(to: directory.appendingPathComponent("manifest.json"))
         XCTAssertThrowsError(try StabilizationInput.load(directory: directory))
     }
+    func testFrontCameraPositionReachesStabilizationContract() throws {
+        let directory = try fixture(resolution: .fullHD, fps: 60)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var manifest = try RecordingManifest.read(from: directory.appendingPathComponent("manifest.json"))
+        XCTAssertNil(manifest.cameraPosition)
+        XCTAssertFalse(try StabilizationInput.load(directory: directory).camera_facing_front)
+        manifest.cameraPosition = "front"
+        try manifest.write(to: directory.appendingPathComponent("manifest.json"))
+        XCTAssertTrue(try StabilizationInput.load(directory: directory).camera_facing_front)
+    }
     func testGravityUsesSameClockAndKeepsRawAxesWithIndependentSampling() throws {
         let directory = try fixture(resolution: .fullHD, fps: 60)
         defer { try? FileManager.default.removeItem(at: directory) }

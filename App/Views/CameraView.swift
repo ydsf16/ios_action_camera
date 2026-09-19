@@ -11,6 +11,7 @@ struct CameraView: View {
     @State private var showLibrary = false
     @State private var showSettings = false
     @State private var pinchStartZoom: Double?
+    @State private var showPreparingIndicator = false
     @AppStorage("cameraGridEnabled") private var gridEnabled = true
 
     private var recording: Bool { camera.phase == .recording }
@@ -58,7 +59,9 @@ struct CameraView: View {
                     }
                 }.padding(30)
             }
-            if camera.phase == .preparing { ProgressView("正在准备相机") }
+            if showPreparingIndicator, camera.phase == .preparing, camera.previewDevice == nil {
+                ProgressView("正在准备相机")
+            }
 
             // Only the controls respect safe areas; the live image extends behind them.
             VStack(spacing: 0) {
@@ -84,7 +87,7 @@ struct CameraView: View {
                 Spacer(minLength: 24)
 
                 VStack(spacing: 16) {
-                    if !camera.usesVirtualCamera {
+                    if !camera.usesVirtualCamera && !camera.isFrontCamera {
                         HStack(spacing: 14) {
                         ForEach(camera.lenses) { lens in
                             Button { camera.selectLens(lens) } label: {
@@ -129,7 +132,13 @@ struct CameraView: View {
                         .accessibilityLabel(recording ? "停止录制" : "开始录制")
                         .accessibilityIdentifier("recordButton")
                         Spacer()
-                        Color.clear.frame(width: 54, height: 54)
+                        Button { camera.switchCamera() } label: {
+                            Image(systemName: "arrow.triangle.2.circlepath.camera")
+                                .font(.title2).frame(width: 54, height: 54)
+                                .background(.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 14))
+                        }
+                        .accessibilityLabel(camera.isFrontCamera ? "切换到后置相机" : "切换到前置相机")
+                        .disabled(!camera.hasFrontCamera || recording || camera.phase != .ready)
                     }.padding(.horizontal, 30)
                 }.padding(.bottom, 20)
             }.opacity(camera.hardwareControlsFullscreen ? 0 : 1)
@@ -149,6 +158,12 @@ struct CameraView: View {
             guard scenePhase == .active, !showLibrary, !showSettings, let notice = camera.captureNotice else { return }
             do { try await Task.sleep(for: .seconds(4)) } catch { return }
             if camera.captureNotice?.id == notice.id { camera.captureNotice = nil }
+        }
+        .task(id: camera.phase) {
+            showPreparingIndicator = false
+            guard camera.phase == .preparing, camera.previewDevice == nil else { return }
+            do { try await Task.sleep(for: .milliseconds(700)) } catch { return }
+            if camera.phase == .preparing, camera.previewDevice == nil { showPreparingIndicator = true }
         }
         .modifier(HardwareCaptureModifier(enabled: scenePhase == .active && !showLibrary && !showSettings && camera.message == nil && !camera.startingRecording && (camera.phase == .ready || recording)) {
             if recording { camera.stopRecording() } else { camera.startRecording() }
@@ -178,6 +193,11 @@ struct CameraView: View {
             await camera.prepare()
             #if DEBUG
             if args.contains("--focus-controls-test") { await camera.validateFocusControls() }
+            if args.contains("--camera-switch-test") { await camera.validateCameraSwitching() }
+            if let index = args.firstIndex(of: "--front-camera-validation-seconds"), index + 1 < args.count,
+               let seconds = Double(args[index + 1]), seconds.isFinite, (5...30).contains(seconds) {
+                await camera.validateFrontCamera(seconds: seconds)
+            }
             if let index = args.firstIndex(of: "--recording-validation-seconds"), index + 1 < args.count,
                let seconds = Double(args[index + 1]), seconds.isFinite, (5...30).contains(seconds) {
                 await camera.validateRecording(seconds: seconds)
@@ -297,6 +317,7 @@ private struct RecordingSettingsView: View {
                 }.listRowBackground(AppTheme.surface)
                 Section {
                     DisclosureGroup("采集信息") {
+                        LabeledContent("相机方向", value: camera.isFrontCamera ? "前置" : "后置")
                         LabeledContent("镜头切换", value: camera.usesVirtualCamera ? "随变焦自动切换" : "单镜头")
                         LabeledContent("当前镜头", value: camera.activeLensLabel)
                         LabeledContent("声音", value: "开启")

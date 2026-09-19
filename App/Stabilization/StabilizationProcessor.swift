@@ -275,7 +275,10 @@ enum StabilizationProcessor {
                 "sampling_kernel":renderer?.kernelName ?? "wgpu", "output_codec":AVVideoCodecType.h264.rawValue,
                 "output_height":config.output_height,"requested_fps":config.fps,"rolling_shutter":false,"horizon_lock":(stabilizationReport.effectiveHorizonPercent ?? 0) > 0,
                 "horizon_source":(stabilizationReport.effectiveHorizonPercent ?? 0) > 0 ? "CoreMotion.gravity" : "off", "gravity_samples":config.gravity.count,
-                "gravity_orientation":"native image axes = [-deviceY, -deviceX, -deviceZ]; horizon roll = -displayRotationDegrees",
+                "camera_position":config.camera_facing_front ? "front" : "back",
+                "gravity_orientation":config.camera_facing_front
+                    ? "front unmirrored image axes = [deviceY, -deviceX, deviceZ]; horizon roll = +displayRotationDegrees"
+                    : "rear image axes = [-deviceY, -deviceX, -deviceZ]; horizon roll = -displayRotationDegrees",
                 "stabilization": try JSONSerialization.jsonObject(with: JSONEncoder().encode(stabilizationReport)),
                 "lens_model":"recorded per-frame K; uncalibrated zero residual distortion", "created_at":ISO8601DateFormatter().string(from:Date())]
             let receiptData = try JSONSerialization.data(withJSONObject:receipt,options:[.prettyPrinted,.sortedKeys])

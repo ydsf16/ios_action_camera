@@ -33,6 +33,7 @@ struct Config {
     duration_ms: f64, fps: f64, frames: Vec<Frame>, gyro: Vec<Gyro>,
     #[serde(default)] gravity: Vec<Gravity>,
     #[serde(default)] display_rotation_degrees: i32,
+    #[serde(default)] camera_facing_front: bool,
 }
 fn default_gpu() -> bool { true }
 #[repr(C)]
@@ -45,11 +46,20 @@ pub struct StabilizationReport {
 }
 pub struct Engine { transforms: gyroflow_core::stabilization::ComputeParams, use_gpu: bool, manager: StabilizationManager, width: usize, height: usize, ow: usize, oh: usize, report: StabilizationReport }
 
-// CoreMotion is portrait device x-right/y-up/z-out-of-screen. Unrotated rear-camera
-// image axes are x=-deviceY, y=-deviceX, z=-deviceZ. Gyroflow's gravity API expects
-// this image vector directly; it does NOT apply the raw-gyro XYZ orientation mapping.
-fn image_gravity(g: [f64; 3]) -> nalgebra::Vector3<f64> {
-    nalgebra::Vector3::new(-g[1], -g[0], -g[2]).normalize()
+// CoreMotion is portrait device x-right/y-up/z-out-of-screen. The unmirrored
+// front camera differs from the rear camera by a 180 degree rotation around
+// the rear-camera image Y axis. Keep recorded samples raw and apply this
+// camera extrinsic here.
+fn camera_gyro(g: [f64; 3], front: bool) -> [f64; 3] {
+    if front { [-g[0], g[1], -g[2]] } else { g }
+}
+
+// Gyroflow's gravity API expects image axes directly; it does not apply the
+// raw-gyro orientation mapping. Rear: [-deviceY,-deviceX,-deviceZ].
+// Front, unmirrored: [deviceY,-deviceX,deviceZ].
+fn image_gravity(g: [f64; 3], front: bool) -> nalgebra::Vector3<f64> {
+    let v = if front { [g[1], -g[0], g[2]] } else { [-g[1], -g[0], -g[2]] };
+    nalgebra::Vector3::from(v).normalize()
 }
 
 fn gravity_lock_amount(g: &nalgebra::Vector3<f64>) -> f64 {
@@ -59,13 +69,19 @@ fn gravity_lock_amount(g: &nalgebra::Vector3<f64>) -> f64 {
 }
 
 fn configure_horizon(manager: &StabilizationManager, config: &Config, amount: f64) {
-    manager.set_horizon_lock(amount, if config.options.horizon_lock { -f64::from(config.display_rotation_degrees) } else { 0.0 });
+    let display_roll = if config.camera_facing_front {
+        f64::from(config.display_rotation_degrees)
+    } else {
+        -f64::from(config.display_rotation_degrees)
+    };
+    manager.set_horizon_lock(amount, if config.options.horizon_lock { display_roll } else { 0.0 });
     let mut keyframes = manager.keyframes.write();
     keyframes.clear_type(&gyroflow_core::keyframes::KeyframeType::LockHorizonAmount);
-    if amount > 0.0 && config.gravity.iter().any(|g| gravity_lock_amount(&image_gravity(g.gravity)) < 100.0) {
+    if amount > 0.0 && config.gravity.iter().any(|g| gravity_lock_amount(&image_gravity(g.gravity, config.camera_facing_front)) < 100.0) {
         for g in &config.gravity {
             keyframes.set(&gyroflow_core::keyframes::KeyframeType::LockHorizonAmount,
-                (g.timestamp_ms*1000.0).round() as i64, gravity_lock_amount(&image_gravity(g.gravity)) * amount / 100.0);
+                (g.timestamp_ms*1000.0).round() as i64,
+                gravity_lock_amount(&image_gravity(g.gravity, config.camera_facing_front)) * amount / 100.0);
         }
     }
 }
@@ -167,11 +183,12 @@ fn create(config: Config) -> Result<Engine, String> {
     // Gyroflow internal IMUData expects degrees/s. Convert here, not in the recording.
     metadata.raw_imu = config.gyro.iter().map(|g| TimeIMU {
         timestamp_ms: g.timestamp_ms,
-        gyro: Some(g.gyro.map(f64::to_degrees)), accl: None, magn: None,
+        gyro: Some(camera_gyro(g.gyro, config.camera_facing_front).map(f64::to_degrees)), accl: None, magn: None,
     }).collect();
     if config.options.horizon_lock {
         let vectors: gyroflow_core::gyro_source::TimeVec = config.gravity.iter()
-            .map(|g| ((g.timestamp_ms*1000.0).round() as i64, image_gravity(g.gravity))).collect();
+            .map(|g| ((g.timestamp_ms*1000.0).round() as i64,
+                image_gravity(g.gravity, config.camera_facing_front))).collect();
         metadata.gravity_vectors = Some(vectors);
     }
     for frame in &config.frames {
@@ -361,7 +378,17 @@ mod tests {
         Config {use_gpu:false,options:Options::default(),width:640,height:360,output_width:640,output_height:360,duration_ms:1000.0,fps:30.0,
             frames:(0..30).map(|i|Frame {timestamp_us:i*33333,k:[500.,0.,320.,0.,510.,180.,0.,0.,1.]}).collect(),
             gyro:(-5..110).map(|i|Gyro{timestamp_ms:i as f64*10.,gyro:[0.,0.,0.]}).collect(),
-            gravity: Vec::new(), display_rotation_degrees: 0 }
+            gravity: Vec::new(), display_rotation_degrees: 0, camera_facing_front: false }
+    }
+    #[test]
+    fn front_camera_extrinsic_rotates_motion_and_gravity_without_mirroring() {
+        assert_eq!(camera_gyro([1., 2., 3.], false), [1., 2., 3.]);
+        assert_eq!(camera_gyro([1., 2., 3.], true), [-1., 2., -3.]);
+        let rear = image_gravity([0.2, -0.4, 0.8], false);
+        let front = image_gravity([0.2, -0.4, 0.8], true);
+        assert!((rear.x + front.x).abs() < 1e-12);
+        assert!((rear.y - front.y).abs() < 1e-12);
+        assert!((rear.z + front.z).abs() < 1e-12);
     }
     #[test]
     fn stationary_motion_and_full_intrinsics() {
@@ -410,6 +437,24 @@ mod tests {
                 // quarter-turn display transform to Swift. Zero tilt means identity.
                 let c = tilt.to_radians().cos(); let s = tilt.to_radians().sin();
                 for (actual, expected) in [(h[0],c), (h[1],s), (h[4],-s), (h[5],c)] {
+                    assert!((actual as f64/h[10] as f64-expected).abs() < 1e-5,
+                        "rotation={rotation}, tilt={tilt}, warp={h:?}");
+                }
+            }
+        }
+    }
+    #[test]
+    fn front_camera_gravity_horizon_stays_upright_in_all_capture_orientations() {
+        for rotation in [0,90,180,270] {
+            for tilt in [-20.0f64, 0., 20.] {
+                let mut config = gravity_fixture(rotation, tilt);
+                config.camera_facing_front = true;
+                let mut engine = create(config).unwrap();
+                let mut h = [0f32;12];
+                assert_eq!(unsafe { roamshot_engine_transform(&mut engine, 500000, h.as_mut_ptr(), h.len()) }, 0);
+                // An unmirrored front image sees device roll with the opposite sign.
+                let c = tilt.to_radians().cos(); let s = tilt.to_radians().sin();
+                for (actual, expected) in [(h[0],c), (h[1],-s), (h[4],s), (h[5],c)] {
                     assert!((actual as f64/h[10] as f64-expected).abs() < 1e-5,
                         "rotation={rotation}, tilt={tilt}, warp={h:?}");
                 }

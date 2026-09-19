@@ -51,6 +51,7 @@ public struct RecordingManifest: Codable, Sendable {
     public var deviceModel: String
     public var systemVersion: String
     public var camera: String
+    public var cameraPosition: String?
     public var width: Int
     public var height: Int
     public var requestedFPS = 30

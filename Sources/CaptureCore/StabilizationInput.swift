@@ -16,6 +16,7 @@ public struct StabilizationInput: Codable {
     public let gyro: [Gyro]
     public let gravity: [Gravity]
     public let display_rotation_degrees: Int
+    public let camera_facing_front: Bool
 
     public static func load(directory: URL, options: StabilizationOptions = .init()) throws -> Self {
         guard options.isValid else { throw InputError("稳定参数无效。") }
@@ -83,7 +84,8 @@ public struct StabilizationInput: Codable {
             duration_ms: manifest.durationSeconds * 1000, fps: Double(manifest.requestedFPS),
             frames: video.indices.map { Frame(timestamp_us: Int64((video[$0]*1e6).rounded()), k: matrices[$0]) },
             gyro: times.indices.map { Gyro(timestamp_ms: map.videoSeconds(for: times[$0])*1000, gyro: [gx[$0],gy[$0],gz[$0]]) },
-            gravity: gravity, display_rotation_degrees: manifest.displayRotationDegrees)
+            gravity: gravity, display_rotation_degrees: manifest.displayRotationDegrees,
+            camera_facing_front: manifest.cameraPosition == "front")
     }
     private static func increasing(_ values: [Double]) -> Bool {
         !values.isEmpty && zip(values,values.dropFirst()).allSatisfy { $0.1 > $0.0 }
