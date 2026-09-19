@@ -1,3 +1,4 @@
 [submodule "vendor/gyroflow"]
 	path = vendor/gyroflow
-	url = https://github.com/gyroflow/gyroflow.git
+	url = https://github.com/ydsf16/gyroflow.git
+	branch = roamshot-v1.6.3
