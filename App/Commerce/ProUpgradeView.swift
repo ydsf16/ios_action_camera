@@ -4,6 +4,13 @@ import SwiftUI
 struct ProUpgradeView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var access = ProAccess.shared
+    private var screenshotPrice: String? {
+        #if DEBUG && targetEnvironment(simulator)
+        ProcessInfo.processInfo.arguments.contains("--store-upgrade-screenshot") ? "¥20.00 · 永久解锁" : nil
+        #else
+        nil
+        #endif
+    }
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -13,11 +20,11 @@ struct ProUpgradeView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("RoamShot Pro").font(.largeTitle.bold())
                         Text(access.hasPro ? "已永久解锁" : "让精彩继续").font(.title2.weight(.semibold))
-                        Text("永久解锁超过 1 分钟的视频录制。一次购买，无订阅。")
+                        Text("永久解锁超过 3 分钟的视频录制。一次购买，无订阅。")
                             .foregroundStyle(.secondary)
                     }
                     VStack(alignment: .leading, spacing: 16) {
-                        Label("免费：每段最长 1 分钟，不限次数", systemImage: "video")
+                        Label("免费：每段最长 3 分钟，不限次数", systemImage: "video")
                         Label("Pro：解锁长时间连续录制", systemImage: "infinity")
                         Label("全画质、全部稳定参数，无水印", systemImage: "slider.horizontal.3")
                         Label("素材保存在本机，原片随时导出", systemImage: "internaldrive")
@@ -30,9 +37,9 @@ struct ProUpgradeView: View {
                         } label: {
                             HStack {
                                 if access.busy || access.loadingProduct { ProgressView() }
-                                Text(access.product.map { "\($0.displayPrice) · 永久解锁" } ?? "正在获取价格")
+                                Text(screenshotPrice ?? access.product.map { "\($0.displayPrice) · 永久解锁" } ?? "正在获取价格")
                             }.frame(maxWidth: .infinity)
-                        }.buttonStyle(PrimaryActionStyle()).disabled(access.busy || access.product == nil)
+                        }.buttonStyle(PrimaryActionStyle()).disabled(access.busy || (access.product == nil && screenshotPrice == nil))
                         HStack {
                             Button("恢复购买") { Task { await access.restore() } }
                             Spacer()
@@ -40,7 +47,7 @@ struct ProUpgradeView: View {
                         }.font(.subheadline).disabled(access.busy || access.loadingProduct)
                     }
                     if let message = access.message { Text(message).font(.footnote).foregroundStyle(AppTheme.amber) }
-                    Text("免费录制到 1 分钟会自动停止并保存，稳定处理和导出不再收费。长视频需要更多存储空间和处理时间。")
+                    Text("免费录制到 3 分钟会自动停止并保存，稳定处理和导出不再收费。长视频需要更多存储空间和处理时间。")
                         .font(.footnote).foregroundStyle(.secondary)
                     HStack {
                         Link("隐私政策", destination: AppLinks.privacy)

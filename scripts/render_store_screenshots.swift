@@ -15,7 +15,7 @@ let cards = [
  Card(file:"02-zoom.png",source:"raw/zoom.png",label:"长焦与变焦",title:"拉近远处，\n拍后稳住。",subtitle:"长焦与放大拍摄，也能进行拍后防抖。",footnote:"界面演示 · AI 生成风景 · 非实拍防抖对比",accent:0x6AABF5),
  Card(file:"03-playback.png",source:"raw/playback.png",label:"全屏回看",title:"拍完以后，\n再选稳定感。",subtitle:"原片保留，随时调整与导出。",footnote:"实际应用界面 · 风景为 AI 生成的演示素材",accent:0x46DAC6),
  Card(file:"04-simple.png",source:"raw/simple.png",label:"轻松设置",title:"三档稳定，\n一点就好。",subtitle:"自然 / 标准 / 强力 · 支持重力水平锁定",footnote:"生成前选择 1080p 或 2.8K 输出",accent:0x6AABF5),
- Card(file:"05-unlock.png",source:"iap-review.png",label:"免费开始",title:"免费拍摄，\n随时出发。",subtitle:"每段 1 分钟免费 · 长时间录制一次买断",footnote:"升级入口在设置 · 稳定与导出无水印 · 无订阅",accent:0x46DAC6),
+ Card(file:"05-unlock.png",source:"iap-review.png",label:"免费开始",title:"免费拍摄，\n随时出发。",subtitle:"每段 3 分钟免费 · 长时间录制一次买断",footnote:"升级入口在设置 · 稳定与导出无水印 · 无订阅",accent:0x46DAC6),
  Card(file:"06-controls.png",source:"raw/advanced.png",label:"高级控制",title:"视野与裁切，\n由你决定。",subtitle:"动态缩放、裁切上限、允许黑边。",footnote:"稳定效果取决于素材、光线和所选参数",accent:0xB29AF8)
 ]
 try FileManager.default.createDirectory(at: root.appendingPathComponent("store"), withIntermediateDirectories:true)

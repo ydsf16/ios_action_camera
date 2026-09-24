@@ -101,7 +101,7 @@ struct CameraView: View {
                     if camera.zoomRange.maximum > camera.zoomRange.minimum { CameraZoomControls(camera: camera) }
 
                     if recording && !access.hasPro {
-                        Text("\(max(0, 60 - Int(camera.duration))) 秒后自动保存")
+                        Text("\(max(0, Int(RecordingLimitPolicy.freeSeconds) - Int(camera.duration))) 秒后自动保存")
                             .font(.caption).foregroundStyle(.white.opacity(0.85))
                     }
                     Text(camera.phase == .finishing ? "正在保存…" : "视频")
@@ -281,7 +281,7 @@ private struct RecordingSettingsView: View {
                             Text(access.hasPro ? "已永久解锁" : "永久解锁").font(.subheadline).foregroundStyle(AppTheme.accent)
                         }
                     }
-                } footer: { Text("免费每段最长 1 分钟，到点自动保存。Pro 解锁长时间录制，稳定处理和导出不另收费。") }
+                } footer: { Text("免费每段最长 3 分钟，到点自动保存。Pro 解锁长时间录制，稳定处理和导出不另收费。") }
                     .listRowBackground(AppTheme.surface)
                 Section {
                     CaptureFormatControls(camera: camera, showIcons: true).disabled(camera.phase != .ready)

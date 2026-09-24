@@ -58,3 +58,8 @@
 - CaptureCore completed 32 tests with zero failures; the Rust engine completed 23 tests with zero failures and one physical-Metal-only test skipped.
 - The signed iOS archive succeeded, reports `com.grape.RoamShot` version 1.0.2 (33), minimum iOS 17.0, and passes the Mach-O linkage audit.
 - The engine build script now pins the RoamShot Gyroflow fork revision; overlapping validation hunks already contained in the fork were removed from the local patch.
+
+## Build 34 release preparation — 2026-09-24
+
+- The free per-recording limit increases from 60 seconds to 180 seconds. Pro remains a lifetime unlock for longer continuous recordings; stabilization and export remain free and unrestricted.
+- Store copy, review notes, support/terms pages and the upgrade screenshot are updated to the same three-minute rule. Build 33 was uploaded and attached to the draft but was not submitted for review.
