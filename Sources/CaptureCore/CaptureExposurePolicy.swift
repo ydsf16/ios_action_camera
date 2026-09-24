@@ -34,8 +34,8 @@ public enum CaptureExposurePolicy: String, CaseIterable, Identifiable {
         case .fastMotion: 2
         }
     }
-    public static func load() -> Self {
-        UserDefaults.standard.string(forKey: "captureExposurePolicy").flatMap(Self.init(rawValue:)) ?? .motion
+    public static func load(storage: UserDefaults = .standard) -> Self {
+        storage.string(forKey: "captureExposurePolicy").flatMap(Self.init(rawValue:)) ?? .fastMotion
     }
-    public func save() { UserDefaults.standard.set(rawValue, forKey: "captureExposurePolicy") }
+    public func save(storage: UserDefaults = .standard) { storage.set(rawValue, forKey: "captureExposurePolicy") }
 }

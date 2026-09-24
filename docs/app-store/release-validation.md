@@ -49,3 +49,12 @@
 - The earlier 1.0.0 (27) submission was withdrawn to replace its build. The version was updated to 1.0.1 and associated with build 32. The six screenshots, Chinese marketing copy, review instructions and automatic release setting were retained.
 - App 1.0.1 (32) and RoamShot Pro Lifetime were submitted together at 00:33 China Standard Time. Live App Store Connect showed both items **Waiting for Review**, submission ID `fc166f2e-b1f9-434d-87ac-386f8a11bd25`.
 - Submission is complete; Apple review approval and App Store availability remain pending. The historical outstanding StoreKit acceptance above is not implied to be completed by submission.
+
+## Build 33 release preparation — 2026-09-24
+
+- Version 1.0.2 (33) includes the committed front-camera path, per-interval crop adaptation, capture controls, 10× zoom limit, direct sharing and foreground job recovery already present on `main`.
+- New installations default to the ≤2 ms exposure cap. A previously saved exposure choice remains unchanged.
+- Rolling-shutter controls and the experimental ≤1 ms / ≤0.5 ms options are excluded from this build.
+- CaptureCore completed 32 tests with zero failures; the Rust engine completed 23 tests with zero failures and one physical-Metal-only test skipped.
+- The signed iOS archive succeeded, reports `com.grape.RoamShot` version 1.0.2 (33), minimum iOS 17.0, and passes the Mach-O linkage audit.
+- The engine build script now pins the RoamShot Gyroflow fork revision; overlapping validation hunks already contained in the fork were removed from the local patch.
