@@ -9,7 +9,7 @@
 隐私：https://ydsf16.github.io/ios_action_camera/privacy.html
 内购 ID：com.grape.RoamShot.pro.lifetime
 内购名称：RoamShot Pro 永久解锁
-内购描述：一次购买，永久解锁超过 3 分钟的连续录制。
+内购描述：一次购买，永久解锁长时间连续录制。
 中国区价格：¥20（已在 App Store Connect 保存并复查）
 首发地区：中国大陆
 版权：2026 Xiaocong Jiang（沿用 Sensor Recorder Pro）
@@ -53,9 +53,9 @@ The app stabilizes its own recordings using synchronized motion data on-device. 
 
 The capture, zoom and playback screenshots use AI-generated scenery solely as illustrative sample media within the app UI. They are labeled and are not real capture or before/after stabilization-quality comparisons. The capture controls are rendered from the production SwiftUI views in an isolated simulator fixture.
 
-## 提交前仍需核验
+## 发布状态与待验收事项
 
-- 账户持有人处理待更新协议；App 记录 6811549990 已创建，Bundle ID com.grape.RoamShot，云管理 Apple Distribution 签名导出成功。
+- App 1.0.2（34）与内购说明于 2026-09-24 23:04（中国时间）提交，均为等待审核。提交 ID：4ff77d10-84b5-4628-a05f-e776e78b5238。审核通过后自动发布。
 - 本地 StoreKit 购买与退款自动撤权已验证。StoreKitTest 自动会话受运行时配置错误影响；完整恢复、待批准和 App Store sandbox 仍需验收。内购记录 6811551799，价格 ¥20 已确认。
 - 真机 4K60 录满三分钟自动停止、正常封装、IMU 时钟及稳定导出。
 - 支持与隐私链接公开可访问；对应源代码已发布。

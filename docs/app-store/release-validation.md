@@ -63,3 +63,13 @@
 
 - The free per-recording limit increases from 60 seconds to 180 seconds. Pro remains a lifetime unlock for longer continuous recordings; stabilization and export remain free and unrestricted.
 - Store copy, review notes, support/terms pages and the upgrade screenshot are updated to the same three-minute rule. Build 33 was uploaded and attached to the draft but was not submitted for review.
+
+## Build 34 submitted — 2026-09-24
+
+- Source commit `36b65f0586f619c67e10d63262024a3bc382025e` and annotated tag `v1.0.2-build.34` are published; remote main and tag were verified.
+- CaptureCore: 32 tests passed. Simulator build/install/launch and signed Release archive passed. Archive identity is 1.0.2 (34), minimum iOS 17.0; linkage audit passed. This does not establish a physical-device 180-second recording acceptance test.
+- App Store Connect upload succeeded at 22:25:06 China Standard Time; processed build ID `c2f9de69-5db4-4577-80d3-63b6b8183742` replaced build 33 in the draft.
+- Chinese app copy, review notes and upgrade screenshots now describe 180-second free recordings. The existing lifetime IAP localization revision says “一次购买，永久解锁长时间连续录制。” to remain compatible with previous app versions. Its review notes explicitly distinguish previous 60-second and new 180-second limits.
+- All six store screenshots were verified in order. The new upgrade/review screenshot uses build 34 simulator UI with a Debug-only CNY 20 price fixture; Release prices come from StoreKit.
+- App 1.0.2 (34) and the lifetime IAP metadata revision were submitted together at 23:04 China Standard Time. Both visibly show **Waiting for Review**. Submission ID: `4ff77d10-84b5-4628-a05f-e776e78b5238`.
+- Automatic release and immediate availability to all users are selected. Review approval and release remain pending. No agreement acceptance was required during this submission.
