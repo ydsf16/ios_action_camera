@@ -73,3 +73,12 @@
 - All six store screenshots were verified in order. The new upgrade/review screenshot uses build 34 simulator UI with a Debug-only CNY 20 price fixture; Release prices come from StoreKit.
 - App 1.0.2 (34) and the lifetime IAP metadata revision were submitted together at 23:04 China Standard Time. Both visibly show **Waiting for Review**. Submission ID: `4ff77d10-84b5-4628-a05f-e776e78b5238`.
 - Automatic release and immediate availability to all users are selected. Review approval and release remain pending. No agreement acceptance was required during this submission.
+
+
+## Build 34 metadata correction — 2026-09-26
+
+- Apple rejected the submission under guideline 2.3.7 because a store screenshot referenced pricing/free service. No app binary issue was reported.
+- Removed `05-unlock.png` from the App Store listing. Five images remain in order 01, 02, 03, 04, 06.
+- Removed free/pricing language from Promotional Text and What's New. The app description retains the recording limit and purchase information, as Apple's message suggests placing price-change information there.
+- Replied to App Review that the purchase screenshot was removed and pricing/free-service references were removed from promotional text and release notes.
+- Updated the rejected version and resubmitted on September 26, 2026 at 16:40 China Standard Time. App 1.0.2 (34) and the lifetime IAP metadata currently show **Waiting for Review**, using the existing submission ID `4ff77d10-84b5-4628-a05f-e776e78b5238`.
